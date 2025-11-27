@@ -78,8 +78,8 @@ trainer = Engine(
     optimizer=optimizer,
     scheduler=scheduler,
     plugins=[
-        ClassificationReport(num_classes=10, class_names=classes, top_k=5),
-        EarlyStopping(monitor='val_acc', mode='max', patience=2, verbose=True),
+        #ClassificationReport(num_classes=10, class_names=classes, top_k=5),
+        EarlyStopping(monitor='val_acc', mode='max', patience=2),
         GradientAccumulation(steps=2),
         Warmup(warmup_epochs=2),
         Mentor(patience=3, verbose=True)

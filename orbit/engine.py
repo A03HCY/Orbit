@@ -202,7 +202,6 @@ class Engine:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.num_epochs = num_epochs
-        # 优先应该使用传入的 start_epoch，如果没有则维持原状 (支持 Checkpoint 修改)
         if start_epoch is not None:
             self.start_epoch = start_epoch
 
