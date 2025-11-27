@@ -62,10 +62,11 @@ class Engine:
         self.writer: Optional[SummaryWriter] = None
         self.plugins = [
             ModelSummary(model),
-            Checkpoint(name=self.model_name, path=checkpoint_dir) if checkpoint_dir else None,
         ]
-        self.plugins = [p for p in self.plugins if p is not None]
         self.attach(plugins)
+        
+        if checkpoint_dir:
+            self.attach(Checkpoint(name=self.model_name, path=checkpoint_dir))
 
         # --- 内部状态 (State) ---
         self.num_epochs = 0
@@ -100,8 +101,7 @@ class Engine:
     
     def init_board(self, log_dir: str = 'runs') -> 'Engine':
         board = Board(name=self.model_name, log_dir=log_dir)
-        board.on_init(self)
-        self.attach(board)
+        self.attach(board, init=True)
         return self
 
     def set_checkpoint(self, dir: str, name: Optional[str] = None, **kwargs) -> 'Engine':
@@ -147,7 +147,7 @@ class Engine:
         else:
             self.console.print(*args, **kwargs)
     
-    def attach(self, plugin: Union[Callback, List[Callback]]=None):
+    def attach(self, plugin: Union[Callback, List[Callback]]=None, init=False):
         if not plugin: return
         if isinstance(plugin, Callback):
             plugin = [plugin]
@@ -155,6 +155,7 @@ class Engine:
             if not isinstance(p, Callback):
                 raise ValueError(f"Plugin {p} is not a Callback!")
             if p in self.plugins: continue
+            if init: p.on_init(self)
             self.plugins.append(p)
 
     def _fire_event(self, event_name: str):
@@ -199,6 +200,7 @@ class Engine:
         try:
             for epoch in range(self.start_epoch, self.num_epochs):
                 self.epoch = epoch
+                self.metrics = {}
                 
                 # --- 1. Training Loop ---
                 self.state = "TRAIN"
@@ -212,15 +214,40 @@ class Engine:
                     with torch.no_grad():
                         self._run_one_epoch(self.val_loader, prefix="Eval ", color="yellow")
                     self._fire_event("on_eval_end")
-
+                
                 if self.scheduler:
                     self.scheduler.step()
 
                 self._fire_event("on_epoch_end")
+
+                # 打印 Epoch 总结
+                lr_str = ""
+                if self.optimizer:
+                    current_lr = self.optimizer.param_groups[0]['lr']
+                    if current_lr < 1e-6:
+                        lr_str = f" | LR: {current_lr:.2e}"
+                    else:
+                        lr_str = f" | LR: {current_lr:.6f}"
+                    
+                    for p in self.plugins:
+                        if p.__class__.__name__ == 'Warmup' and hasattr(p, 'total_warmup_steps'):
+                            if self.global_step <= p.total_warmup_steps:
+                                lr_str += " [Warmup]"
+                            break
+
+                msg = f"Epoch {self.epoch+1}/{self.num_epochs}"
+                if "train_loss" in self.metrics:
+                    msg += f" | Train Loss: {self.metrics['train_loss']:.4f}"
+                if "val_loss" in self.metrics:
+                    msg += f" | Val Loss: {self.metrics['val_loss']:.4f}"
+                msg += lr_str
+                
+                self.print(msg, plugin='Engine')
                 
                 if self.stop_training:
-                    self.print("[yellow]Training stopped by plugin request.[/]", plugin='Engine')
-                    self._fire_event("on_requested_stop")
+                    if self.epoch < self.num_epochs - 1:
+                        self.print("[yellow]Training stopped by plugin request.[/]", plugin='Engine')
+                        self._fire_event("on_requested_stop")
                     break
                     
         except KeyboardInterrupt:
@@ -307,7 +334,25 @@ class Engine:
                         self.global_step += 1
 
                 # 更新进度条
-                logs = f"Loss: {loss_val:.4f} [Ep {self.epoch+1}/{self.num_epochs}]"
+                lr_str = ""
+                if self.optimizer:
+                    current_lr = self.optimizer.param_groups[0]['lr']
+                    if current_lr < 1e-6:
+                        lr_str = f" LR: {current_lr:.2e}"
+                    else:
+                        lr_str = f" LR: {current_lr:.6f}"
+                    
+                    # 检查是否处于 Warmup 阶段
+                    for p in self.plugins:
+                        if p.__class__.__name__ == 'Warmup' and hasattr(p, 'total_warmup_steps'):
+                            stepped = (batch_idx + 1) % self.accumulation_steps == 0 or (batch_idx + 1) == num_batches
+                            lr_step = self.global_step if stepped else self.global_step + 1
+                            
+                            if lr_step <= p.total_warmup_steps:
+                                lr_str += " [Warmup]"
+                            break
+
+                logs = f"Loss: {loss_val:.4f}{lr_str} [Ep {self.epoch+1}/{self.num_epochs}]"
                 progress.update(task, advance=1, description=logs)
                 
                 self._fire_event("on_batch_end")

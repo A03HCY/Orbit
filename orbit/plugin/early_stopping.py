@@ -40,7 +40,7 @@ class EarlyStopping(Callback):
         # 内部状态 Key
         self._meta_key = 'early_stopping'
 
-    def on_init(self, engine: 'Engine'):
+    def on_train_start(self, engine: 'Engine'):
         """尝试从 engine.meta 恢复状态"""
         if self._meta_key in engine.meta:
             state = engine.meta[self._meta_key]

@@ -121,7 +121,7 @@ class Checkpoint(Callback):
     def _save(self, engine: 'Engine', filename: str, verbose: bool = True):
         # 确保 meta 数据是最新的
         if self.monitor:
-             engine.meta[self._meta_key] = {'best_k_models': self.best_k_models}
+            engine.meta[self._meta_key] = {'best_k_models': self.best_k_models}
 
         state = {
             'epoch': engine.epoch,
@@ -141,7 +141,7 @@ class Checkpoint(Callback):
             if verbose:
                 # 使用相对路径显示，更简洁
                 rel_path = os.path.relpath(file_path)
-                engine.print(f"[green]Saved checkpoint: {rel_path}[/]", plugin='Checkpointing')
+                engine.print(f"Saved checkpoint: [green]{rel_path}[/]", plugin='Checkpointing')
         except Exception as e:
             engine.print(f"[red]Failed to save checkpoint: {e}[/]", plugin='Checkpointing')
 
