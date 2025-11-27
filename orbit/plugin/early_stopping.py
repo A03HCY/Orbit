@@ -51,6 +51,12 @@ class EarlyStopping(Callback):
 
     def on_epoch_end(self, engine: 'Engine'):
         """每 Epoch 检查指标"""
+        # 0. 如果处于 Warmup 阶段，跳过 Early Stopping
+        if engine.is_in_warmup():
+            if self.verbose:
+                engine.print(f"[dim]Skipping EarlyStopping during warmup.[/]", plugin='EarlyStopping')
+            return
+
         # 1. 获取当前指标
         current_score = engine.metrics.get(self.monitor)
         

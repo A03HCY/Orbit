@@ -1,3 +1,6 @@
+import os
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
 import torch
 import torch.nn as nn
 from typing import Any, List, Optional, Union, Dict, Tuple
@@ -99,6 +102,13 @@ class Engine:
         # 触发初始化回调
         self._fire_event("on_init")
     
+    def is_in_warmup(self) -> bool:
+        for p in self.plugins:
+            if p.__class__.__name__ == 'Warmup' and hasattr(p, 'total_warmup_steps'):
+                if self.global_step <= p.total_warmup_steps:
+                    return True
+        return False
+
     def init_board(self, log_dir: str = 'runs') -> 'Engine':
         board = Board(name=self.model_name, log_dir=log_dir)
         self.attach(board, init=True)
@@ -229,11 +239,8 @@ class Engine:
                     else:
                         lr_str = f" | LR: {current_lr:.6f}"
                     
-                    for p in self.plugins:
-                        if p.__class__.__name__ == 'Warmup' and hasattr(p, 'total_warmup_steps'):
-                            if self.global_step <= p.total_warmup_steps:
-                                lr_str += " [Warmup]"
-                            break
+                    if self.is_in_warmup():
+                        lr_str += " [Warmup]"
 
                 msg = f"Epoch {self.epoch+1}/{self.num_epochs}"
                 if "train_loss" in self.metrics:
@@ -342,15 +349,8 @@ class Engine:
                     else:
                         lr_str = f" LR: {current_lr:.6f}"
                     
-                    # 检查是否处于 Warmup 阶段
-                    for p in self.plugins:
-                        if p.__class__.__name__ == 'Warmup' and hasattr(p, 'total_warmup_steps'):
-                            stepped = (batch_idx + 1) % self.accumulation_steps == 0 or (batch_idx + 1) == num_batches
-                            lr_step = self.global_step if stepped else self.global_step + 1
-                            
-                            if lr_step <= p.total_warmup_steps:
-                                lr_str += " [Warmup]"
-                            break
+                    if self.is_in_warmup():
+                        lr_str += " [Warmup]"
 
                 logs = f"Loss: {loss_val:.4f}{lr_str} [Ep {self.epoch+1}/{self.num_epochs}]"
                 progress.update(task, advance=1, description=logs)

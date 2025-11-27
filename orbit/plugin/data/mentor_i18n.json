@@ -1,0 +1,102 @@
+{
+    "en": {
+        "nan_loss_title": "Loss is NaN or Infinity!",
+        "nan_loss_msg": "Gradient explosion detected. Try:\n1. Lower learning rate significantly.\n2. Enable gradient clipping (engine.grad_clip_norm).\n3. Check your data for anomalies.",
+        
+        "divergence_title": "⚠️  Loss Divergence/Instability Detected",
+        "divergence_msg_unstable": "Train loss has increased for {count} consecutive epochs ({loss:.4f}).",
+        "divergence_msg_spike": "Train loss has spiked significantly ({loss:.4f} vs min {min_loss:.4f}).",
+        
+        "stagnation_title": "🛑 Loss Stagnation Detected",
+        "stagnation_msg": "Train loss hasn't improved for {patience} epochs.",
+        
+        "advice_add_warmup": "- Add Warmup: You are not using Warmup. Unstable gradients at start can cause divergence.",
+        "advice_lower_lr": "- Lower LR: Try reducing your initial learning rate.",
+        "advice_warmup_start_lr": "- Warmup Start LR: Your warmup starting learning rate might be too high.",
+        "advice_post_warmup_lr": "- Post-Warmup LR: The learning rate after warmup might be too high.",
+        
+        "advice_small_bs": "- Small Batch Size: Effective Batch Size is {eff_bs}. Small batches have noisy gradients.",
+        "advice_increase_accum": "  -> Try increasing `accumulation_steps` (currently {accum_steps}) or batch size.",
+        
+        "advice_grad_clip": "- Gradient Clipping: Enable `grad_clip_norm` in Engine if not already used.",
+        
+        "advice_warmup_duration": "- Warmup Duration: You are in warmup (Epoch {epoch}).",
+        "advice_warmup_too_long": "  -> Your warmup is {warmup_epochs} epochs (>20% of total). Consider shortening it.",
+        "advice_check_start_lr": "- Start LR: Check if your warmup start LR is too small.",
+        
+        "advice_lr_general": "- Learning Rate: LR might be too small (slow convergence) or too large (bouncing).",
+        "advice_add_scheduler": "- Add Scheduler: You are not using an LR Scheduler. Dynamic LR reduction often breaks stagnation.",
+        "advice_check_scheduler": "- Scheduler: Check if your scheduler decayed LR too early or too aggressively.",
+        
+        "advice_large_bs": "- Large Batch Size: Effective BS is {eff_bs}. Large batches generalize worse.",
+        "advice_reduce_bs": "  -> Try increasing LR (Linear Scaling Rule) or reducing batch size.",
+        
+        "advice_check_init": "- Bad Initialization: Weights might be initialized poorly. Try Xavier or Kaiming initialization.",
+        "advice_overfit_single_batch": "- Debugging: Try overfitting a single batch. If the model can't learn even one batch, there's a bug in the model or data pipeline.",
+        "advice_data_hard": "- Data Complexity: The data might be too hard or noisy. Check labels and input features.",
+
+        "overfitting_title": "📉 Overfitting Detected",
+        "overfitting_msg": "Validation loss is rising while training loss decreases.",
+        "advice_regularization": "- Regularization: Add Dropout or Weight Decay (L2 regularization).",
+        "advice_data_aug": "- Data Augmentation: Increase data augmentation to improve generalization.",
+        "advice_early_stopping": "- Early Stopping: Consider stopping training now to prevent further degradation.",
+
+        "oscillation_title": "〰️ Loss Oscillation Detected",
+        "oscillation_msg": "Training loss is oscillating significantly (Std Dev: {std:.4f}).",
+        "advice_lower_lr_oscillation": "- Lower LR: The learning rate is likely too high, causing the model to overshoot minima.",
+        "advice_oscillation_scheduler": "- Add Scheduler: Dynamic LR reduction helps stabilize training when loss oscillates.",
+        "advice_oscillation_grad_clip": "- Gradient Clipping: Enable `grad_clip_norm` to prevent large gradient updates from destabilizing the model.",
+        
+        "mentor_watching": "[dim]Mentor watching: Eff. Batch Size={eff_bs} (BS={bs} * Accum={accum})[/]"
+    },
+    "zh": {
+        "nan_loss_title": "Loss 变为 NaN 或无穷大！",
+        "nan_loss_msg": "检测到梯度爆炸。尝试：\n1. 显著降低学习率。\n2. 启用梯度裁剪 (engine.grad_clip_norm)。\n3. 检查数据是否存在异常。",
+        
+        "divergence_title": "⚠️  检测到 Loss 发散/不稳定",
+        "divergence_msg_unstable": "训练 Loss 已连续 {count} 个 Epoch 上升 ({loss:.4f})。",
+        "divergence_msg_spike": "训练 Loss 显著飙升 ({loss:.4f} vs 最小值 {min_loss:.4f})。",
+        
+        "stagnation_title": "🛑 检测到 Loss 停滞",
+        "stagnation_msg": "训练 Loss 已连续 {patience} 个 Epoch 未改善。",
+        
+        "advice_add_warmup": "- 添加预热 (Warmup): 您未使用 Warmup。初始阶段的不稳定梯度可能导致发散。",
+        "advice_lower_lr": "- 降低 LR: 尝试降低初始学习率。",
+        "advice_warmup_start_lr": "- Warmup 初始 LR: 您的 Warmup 起始学习率可能过高。",
+        "advice_post_warmup_lr": "- Warmup 后 LR: Warmup 结束后的学习率可能过高。",
+        
+        "advice_small_bs": "- Batch Size 过小: 有效 Batch Size 为 {eff_bs}。小批量会导致梯度噪声大。",
+        "advice_increase_accum": "  -> 尝试增加 `accumulation_steps` (当前为 {accum_steps}) 或 Batch Size。",
+        
+        "advice_grad_clip": "- 梯度裁剪: 如果尚未启用，请在 Engine 中启用 `grad_clip_norm`。",
+        
+        "advice_warmup_duration": "- Warmup 持续时间: 当前处于 Warmup 阶段 (Epoch {epoch})。",
+        "advice_warmup_too_long": "  -> 您的 Warmup 长达 {warmup_epochs} 个 Epoch (>总数的 20%)。考虑缩短它。",
+        "advice_check_start_lr": "- 初始 LR: 检查 Warmup 起始 LR 是否过小。",
+        
+        "advice_lr_general": "- 学习率: LR 可能太小 (收敛慢) 或太大 (在最小值附近震荡)。",
+        "advice_add_scheduler": "- 添加调度器: 您未使用 LR Scheduler。动态降低 LR 通常能打破停滞。",
+        "advice_check_scheduler": "- 检查调度器: 检查 Scheduler 是否过早或过激进地降低了 LR。",
+        
+        "advice_large_bs": "- Batch Size 过大: 有效 BS 为 {eff_bs}。大批量通常泛化能力较差。",
+        "advice_reduce_bs": "  -> 尝试增加 LR (线性缩放规则) 或减小 Batch Size。",
+        
+        "advice_check_init": "- 初始化糟糕: 权重初始化可能不当。尝试使用 Xavier 或 Kaiming 初始化。",
+        "advice_overfit_single_batch": "- 调试建议: 尝试使用单 Batch 过拟合。如果模型连一个 Batch 都学不会，说明模型或数据管道有 Bug。",
+        "advice_data_hard": "- 数据难度: 数据可能太难或噪声太大。检查标签和输入特征。",
+
+        "overfitting_title": "📉 检测到过拟合",
+        "overfitting_msg": "验证集 Loss 正在上升，而训练集 Loss 仍在下降。",
+        "advice_regularization": "- 正则化: 添加 Dropout 或权重衰减 (Weight Decay/L2 正则)。",
+        "advice_data_aug": "- 数据增强: 增加数据增强强度以提高泛化能力。",
+        "advice_early_stopping": "- 早停 (Early Stopping): 考虑立即停止训练以防止性能进一步恶化。",
+
+        "oscillation_title": "〰️ 检测到 Loss 震荡",
+        "oscillation_msg": "训练 Loss 波动剧烈 (标准差: {std:.4f})。",
+        "advice_lower_lr_oscillation": "- 降低 LR: 学习率可能过高，导致模型在极小值附近跳跃。",
+        "advice_oscillation_scheduler": "- 添加调度器: 动态降低 LR 有助于在 Loss 震荡时稳定训练。",
+        "advice_oscillation_grad_clip": "- 梯度裁剪: 启用 `grad_clip_norm` 以防止大梯度更新导致模型不稳定。",
+
+        "mentor_watching": "[dim]Mentor watching: Eff. Batch Size={eff_bs} (BS={bs} * Accum={accum})[/]"
+    }
+}
