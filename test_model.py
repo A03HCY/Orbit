@@ -63,7 +63,7 @@ class ConvNet(nn.Module):
         x = self.fc3(x)
         return x
 
-from orbit.plugin import ClassificationReport
+from orbit.plugin import ClassificationReport, EarlyStopping, GradientAccumulation
 
 model = ConvNet()
 
@@ -77,8 +77,12 @@ trainer = Engine(
     criterion=criterion,
     optimizer=optimizer,
     scheduler=scheduler,
-    checkpoint_dir='./checkpoints/conv_cifar10',
-    plugins=[ClassificationReport(num_classes=10, class_names=classes, top_k=5)]
-)
+    plugins=[
+        ClassificationReport(num_classes=10, class_names=classes, top_k=5),
+        EarlyStopping(monitor='val_acc', mode='max', patience=2, verbose=True),
+        GradientAccumulation(steps=2)
+    ]
+).set_checkpoint('./checkpoints/conv_cifar10')
 
-trainer.run(train_loader, test_loader, num_epochs=5)
+# 增加 epoch 数以测试 EarlyStopping
+trainer.run(train_loader, test_loader, num_epochs=10)

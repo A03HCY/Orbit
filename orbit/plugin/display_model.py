@@ -3,6 +3,7 @@ import torch.nn as nn
 from rich.table import Table
 from rich.console import Console
 from typing import TYPE_CHECKING
+import rich.box as box
 
 from orbit.callback import Callback
 
@@ -22,7 +23,7 @@ class ModelSummary(Callback):
 
     def display(self, model: nn.Module, console: Console):
         """核心打印逻辑"""
-        table = Table(title=f"[bold]Model Summary: {model.__class__.__name__}[/]")
+        table = Table(title=f"[bold]Model Summary: {model.__class__.__name__}[/]", box=box.HORIZONTALS)
         
         table.add_column("Layer (Type)", style="cyan", no_wrap=True)
         table.add_column("Output Shape", style="magenta")
@@ -61,10 +62,10 @@ class ModelSummary(Callback):
         
         # 打印汇总信息
         summary_table = Table(show_header=False, box=None)
-        summary_table.add_row("Total Params:", f"[bold]{total_params:,}[/]")
+        summary_table.add_row("Total Params:", f"[bold cyan]{total_params:,}[/]")
         summary_table.add_row("Trainable Params:", f"[bold green]{trainable_params:,}[/] ({trainable_params/total_params:.1%})")
         summary_table.add_row("Non-trainable Params:", f"[dim]{total_params - trainable_params:,}[/]")
         summary_table.add_row("Est. Params Size (MB):", f"[bold blue]{total_size_mb:.2f} MB[/]")
         
         console.print(summary_table)
-        console.print("-" * 40)
+        console.print(' ' + '─' * 15 + '┬' + '─' * 35)

@@ -17,7 +17,7 @@ class Board(Callback):
         # 如果 log_dir 不存在会自动创建
         self.writer = SummaryWriter(log_dir=self.log_dir)
         engine.writer = self.writer 
-        engine.print(f'[cyan]TensorBoard initialized. Log dir: {self.log_dir}[/]')
+        engine.print(f'[cyan]Initialized. Log dir: {self.log_dir}[/]', plugin='Board')
 
     def on_batch_end(self, engine: 'Engine'):
         '''
@@ -42,10 +42,8 @@ class Board(Callback):
         2. 其他 Metrics (如果在 engine.metrics 字典里有的话)
         '''
         
-        # 我们根据 engine.metrics 里的内容自动记录
-        # engine.metrics 应该长这样: {'train_loss': 0.5, 'val_loss': 0.4, 'acc': 0.9}
+        # engine.metrics: {'train_loss': 0.5, 'val_loss': 0.4, 'acc': 0.9}
         for key, value in engine.metrics.items():
-            # 自动把 'train_loss' 分组到 'Loss/train'
             if 'loss' in key.lower():
                 tag = f'Loss/{key}'
             elif 'acc' in key.lower():

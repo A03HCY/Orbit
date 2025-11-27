@@ -15,6 +15,17 @@ from orbit.plugin.board import Board
 from orbit.plugin.display_model import ModelSummary
 
 class Engine:
+
+    class _OutLogs:
+        def __init__(self, engine: 'Engine'):
+            self.engine = engine
+        def __enter__(self):
+            self.engine._print_edge(top=False)
+            self.engine.console.print('\n')
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            self.engine.console.print('\n')
+            self.engine._print_edge(top=True)
+
     def __init__(
         self,
         model: nn.Module,
@@ -47,6 +58,7 @@ class Engine:
 
         # --- 交互与回调 ---
         self.console = console if console else Console()
+        self.out_logs = self._OutLogs(self)
         self.writer: Optional[SummaryWriter] = None
         self.plugins = [
             ModelSummary(model),
@@ -64,6 +76,8 @@ class Engine:
         self.batch_idx = 0       # 当前 Batch 索引
         
         self.state = "IDLE"      # TRAIN / EVAL
+        self.stop_training = False # 插件可以通过设置此标志为 True 来停止训练
+        self.accumulation_steps = 1 # 梯度累积步数
 
         self.exception: Optional[Exception] = None
         
@@ -89,9 +103,49 @@ class Engine:
         board.on_init(self)
         self.attach(board)
         return self
+
+    def set_checkpoint(self, dir: str, name: Optional[str] = None, **kwargs) -> 'Engine':
+        """
+        配置 Checkpoint 插件。
+        如果已存在 Checkpoint 插件，将被替换。
+        
+        Args:
+            dir (str): 保存目录。
+            name (str): 模型名称前缀。如果为 None，则使用 model_name。
+            **kwargs: 传递给 Checkpoint 构造函数的其他参数 (monitor, save_top_k 等)。
+        """
+        if name is None:
+            name = self.model_name
+            
+        # 1. 移除旧的 Checkpoint 插件 (如果存在)
+        self.plugins = [p for p in self.plugins if not isinstance(p, Checkpoint)]
+        
+        # 2. 创建新插件
+        ckpt = Checkpoint(name=name, path=dir, **kwargs)
+        
+        # 3. 调用 ckpt.on_init(self)
+        ckpt.on_init(self)
+        
+        # 4. 挂载
+        self.attach(ckpt)
+        return self
     
-    def print(self, *args, **kwargs):
-        self.console.print(*args, **kwargs)
+    def _print_edge(self, top=True):
+        char = '┬' if top else '┴'
+        self.console.print(' ' + '─' * 15 + char + '─' * 35)
+    
+    def print(self, *args, plugin: Optional[str] = None, **kwargs):
+        """
+        统一打印方法。
+        Args:
+            plugin (str): 插件名称。如果提供，将以固定宽度对齐打印。
+        """
+        if plugin:
+            # 宽度 15, 右对齐, 青色加粗
+            prefix = f"[bold cyan]{plugin:>15}[/] │"
+            self.console.print(prefix, *args, **kwargs)
+        else:
+            self.console.print(*args, **kwargs)
     
     def attach(self, plugin: Union[Callback, List[Callback]]=None):
         if not plugin: return
@@ -163,15 +217,22 @@ class Engine:
                     self.scheduler.step()
 
                 self._fire_event("on_epoch_end")
+                
+                if self.stop_training:
+                    self.print("[yellow]Training stopped by plugin request.[/]", plugin='Engine')
+                    self._fire_event("on_requested_stop")
+                    break
+                    
         except KeyboardInterrupt:
-            self.print("[red][bold]Training interrupted by user.")
-            self._fire_event("on_train_interrupt")
+            self.print("[red][bold]Training interrupted by user.", plugin='Engine')
+            self._fire_event("on_requested_stop")
         except Exception as e:
             self.exception = e
             self.console.print_exception()
             self._fire_event("on_exception")
         finally:
             self._fire_event("on_train_end")
+            self._print_edge(top=False)
 
     def _run_one_epoch(self, loader, prefix="Train", color="blue"):
         is_train = (self.state == "TRAIN")
@@ -209,7 +270,7 @@ class Engine:
                         raise ValueError("Model returned None! Please check your model's forward() method.")
                     
                     if self.criterion and self.target is not None:
-                        self.target = self.target.float()
+                        self.target = self.target
                         self.loss = self.criterion(self.output, self.target)
                     else:
                         self.loss = torch.tensor(0.0, device=self.device)
@@ -219,21 +280,31 @@ class Engine:
 
                 # --- Backward (仅训练模式) ---
                 if is_train:
-                    self.optimizer.zero_grad()
+                    # 1. 梯度累积：Loss 缩放
+                    if self.accumulation_steps > 1:
+                        self.loss = self.loss / self.accumulation_steps
+                    
+                    # 2. Backward (计算梯度)
                     if self.use_amp and self.scaler:
                         self.scaler.scale(self.loss).backward()
-                        if self.grad_clip_norm:
-                            self.scaler.unscale_(self.optimizer)
-                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
                     else:
                         self.loss.backward()
-                        if self.grad_clip_norm:
-                            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                        self.optimizer.step()
-                    
-                    self.global_step += 1
+
+                    # 3. Optimizer Step (仅在累积步数到达或 Epoch 结束时执行)
+                    if (batch_idx + 1) % self.accumulation_steps == 0 or (batch_idx + 1) == num_batches:
+                        if self.use_amp and self.scaler:
+                            if self.grad_clip_norm:
+                                self.scaler.unscale_(self.optimizer)
+                                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                            self.scaler.step(self.optimizer)
+                            self.scaler.update()
+                        else:
+                            if self.grad_clip_norm:
+                                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                            self.optimizer.step()
+                        
+                        self.optimizer.zero_grad()
+                        self.global_step += 1
 
                 # 更新进度条
                 logs = f"Loss: {loss_val:.4f} [Ep {self.epoch+1}/{self.num_epochs}]"

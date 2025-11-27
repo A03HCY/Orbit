@@ -5,6 +5,7 @@ import seaborn as sns
 from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
 from rich.table import Table
 from typing import List, Optional, TYPE_CHECKING
+import rich.box as box
 
 from orbit.callback import Callback
 if TYPE_CHECKING:
@@ -98,7 +99,7 @@ class ClassificationReport(Callback):
 
     def _print_rich_table(self, engine, report: dict, acc: float, topk_acc: Optional[float] = None):
         """用 Rich 打印漂亮的分类报告表格"""
-        table = Table(title=f"[bold]Evaluation Report (Ep {engine.epoch+1})[/]")
+        table = Table(title=f"[bold]Evaluation Report (Ep {engine.epoch+1})[/]", box=box.HORIZONTALS)
         table.add_column("Class", style="cyan")
         table.add_column("Precision", justify="right")
         table.add_column("Recall", justify="right")
@@ -123,10 +124,12 @@ class ClassificationReport(Callback):
             end_section=True
         )
         
-        engine.print(table)
-        engine.print(f"[green]Accuracy: {acc*100:.2f}%[/]")
+        with engine.out_logs:
+            engine.print(table)
+        
+        engine.print(f"Accuracy: [green]{acc*100:.2f}%[/]", plugin='ClassReport')
         if topk_acc is not None:
-            engine.print(f"[green]Top-{self.top_k} Accuracy: {topk_acc*100:.2f}%[/]")
+            engine.print(f"Top-{self.top_k} Accuracy: [green]{topk_acc*100:.2f}%[/]", plugin='ClassReport')
 
     def _plot_confusion_matrix(self, y_true, y_pred):
         """使用 Seaborn 绘制混淆矩阵"""

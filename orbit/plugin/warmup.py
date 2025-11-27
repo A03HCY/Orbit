@@ -73,9 +73,9 @@ class Warmup(Callback):
 
         # 打印信息
         if self.total_warmup_steps > 0 or self.mode == 'noam':
-            engine.print(f"[magenta]Warmup strategy activated: {self.mode}[/]")
+            engine.print(f"[magenta]Strategy activated: {self.mode}[/]", plugin='Warmup')
             if self.mode != 'noam':
-                engine.print(f"[magenta]Warmup steps: {self.total_warmup_steps} (Epochs: {self.warmup_epochs})[/]")
+                engine.print(f"[magenta]Steps: {self.total_warmup_steps} (Epochs: {self.warmup_epochs})[/]", plugin='Warmup')
 
     def on_batch_start(self, engine: 'Engine'):
         """
