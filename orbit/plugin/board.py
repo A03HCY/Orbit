@@ -1,4 +1,3 @@
-import os
 from torch.utils.tensorboard import SummaryWriter
 from typing import Optional, TYPE_CHECKING
 from orbit.callback import Callback

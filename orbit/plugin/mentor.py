@@ -12,8 +12,8 @@ if TYPE_CHECKING:
 
 class Mentor(Callback):
     """
-    Mentor 插件：像导师一样监控训练过程，提供改进建议。
-    主要关注 Loss 的异常行为（停滞、发散、过拟合、震荡）并结合 Warmup 状态给出建议。
+    Mentor 插件：监控训练过程，提供改进建议。
+    主要关注 Loss 的异常行为（停滞、发散、过拟合、震荡）并结合状态给出建议。
     """
     def __init__(
         self,

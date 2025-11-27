@@ -1,5 +1,5 @@
 import numpy as np
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING
 from orbit.callback import Callback
 
 if TYPE_CHECKING:

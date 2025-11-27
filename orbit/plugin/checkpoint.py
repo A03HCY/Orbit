@@ -1,8 +1,6 @@
 import os
 import torch
-import glob
-import numpy as np
-from typing import TYPE_CHECKING, List, Tuple, Optional
+from typing import TYPE_CHECKING, List, Tuple
 from orbit.callback import Callback
 
 if TYPE_CHECKING:

@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 from rich.table import Table
 from rich.console import Console
@@ -44,13 +43,11 @@ class ModelSummary(Callback):
             
             is_trainable = "[bold green]Yes[/]" if num_trainable > 0 else "[dim]No[/]"
             
-            # 尝试获取输出形状 (这通常需要 hook, 这里为了简单我们只显示 Layer Type)
-            # 想要准确的 output shape 需要像 torchinfo/torchsummary 那样做一次 fake forward
             layer_name = f"{name} ({module.__class__.__name__})"
             
             table.add_row(
                 layer_name, 
-                "-", # 若不做 forward 推理，很难静态获取 output shape
+                "-",
                 f"{num_params:,}", 
                 is_trainable
             )
