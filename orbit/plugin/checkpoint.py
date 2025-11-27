@@ -42,7 +42,9 @@ class Checkpoint(Callback):
             'global_step': engine.global_step,
             'model_state_dict': engine.model.state_dict(),
             'optimizer_state_dict': engine.optimizer.state_dict() if engine.optimizer else None,
+            'scheduler_state_dict': engine.scheduler.state_dict() if engine.scheduler else None,
             'scaler_state_dict': engine.scaler.state_dict() if engine.scaler else None,
+            'meta': engine.meta, # 保存插件元数据
         }
         if self.save_weights_only:
             state = engine.model.state_dict()
@@ -77,11 +79,19 @@ class Checkpoint(Callback):
                 # 恢复 Optimizer
                 if engine.optimizer and 'optimizer_state_dict' in checkpoint:
                     engine.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+                # 恢复 Scheduler
+                if engine.scheduler and 'scheduler_state_dict' in checkpoint:
+                    engine.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
                 
                 # 恢复 AMP Scaler
                 if engine.scaler and 'scaler_state_dict' in checkpoint:
                     engine.scaler.load_state_dict(checkpoint['scaler_state_dict'])
                 
+                # 恢复 Meta
+                if 'meta' in checkpoint:
+                    engine.meta.update(checkpoint['meta'])
+
                 # 恢复 Epoch 和 Step
                 # 注意：checkpoint 保存的是“完成时”的 epoch，所以开始应该 +1
                 loaded_epoch = checkpoint.get('epoch', 0)

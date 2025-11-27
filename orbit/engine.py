@@ -23,6 +23,7 @@ class Engine:
         device: Optional[str] = None,
         use_amp: bool = False,
         grad_clip_norm: float = None,
+        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         plugins: List[Callback] = None,
         checkpoint_dir: str = None,
         console: Console = None,
@@ -41,7 +42,7 @@ class Engine:
         # --- 训练配置 ---
         self.use_amp = use_amp
         self.grad_clip_norm = grad_clip_norm
-        # 修正：确保 scaler 逻辑正确，有些环境如果不指定 enable=False 可能报错
+        self.scheduler = scheduler
         self.scaler = torch.amp.GradScaler('cuda', enabled=use_amp) 
 
         # --- 交互与回调 ---
@@ -67,11 +68,18 @@ class Engine:
         self.exception: Optional[Exception] = None
         
         # 当前 Batch 的数据容器
-        self.data: Any = None
-        self.target: Any = None
-        self.output: Any = None
+        self.data: Union[torch.Tensor, List[torch.Tensor], Dict[str, torch.Tensor]] = None
+        self.target: Union[torch.Tensor, List[torch.Tensor], Dict[str, torch.Tensor]] = None
+        self.output: Union[torch.Tensor, List[torch.Tensor], Dict[str, torch.Tensor]] = None
         self.loss: torch.Tensor = None
         self.metrics: Dict[str, Any] = {} # 存放每个Epoch的统计指标
+
+        # --- 持久化元数据 (Meta) ---
+        # 这是一个随 Checkpoint 保存和加载的字典。
+        # 插件可以使用这个字典来存储任何需要在训练中断/恢复后保持的状态。
+        # 例如：EarlyStopping 的 best_score, Warmup 的状态等。
+        # 使用方法: engine.meta['plugin_name'] = { ... state ... }
+        self.meta: Dict[str, Any] = {}
 
         # 触发初始化回调
         self._fire_event("on_init")
@@ -124,7 +132,7 @@ class Engine:
             self.data = batch_data.to(self.device)
             self.target = None
 
-    def run(self, train_loader, val_loader=None, num_epochs=10, start_epoch=None):
+    def run(self, train_loader, val_loader=None, num_epochs=10, start_epoch=None, with_eval=True):
         """主要的入口方法"""
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -144,12 +152,15 @@ class Engine:
                 self._run_one_epoch(self.train_loader, prefix="Train", color="blue")
 
                 # --- 2. Validation Loop ---
-                if self.val_loader:
+                if self.val_loader and with_eval:
                     self.state = "EVAL"
                     self._fire_event("on_eval_start")
                     with torch.no_grad():
                         self._run_one_epoch(self.val_loader, prefix="Eval ", color="yellow")
                     self._fire_event("on_eval_end")
+
+                if self.scheduler:
+                    self.scheduler.step()
 
                 self._fire_event("on_epoch_end")
         except KeyboardInterrupt:
@@ -198,6 +209,7 @@ class Engine:
                         raise ValueError("Model returned None! Please check your model's forward() method.")
                     
                     if self.criterion and self.target is not None:
+                        self.target = self.target.float()
                         self.loss = self.criterion(self.output, self.target)
                     else:
                         self.loss = torch.tensor(0.0, device=self.device)
@@ -235,4 +247,3 @@ class Engine:
         # 存入 metrics 供 Callback (如 Checkpoint) 使用
         metric_key = "train_loss" if self.state == "TRAIN" else "val_loss"
         self.metrics[metric_key] = avg_loss
-        

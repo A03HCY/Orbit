@@ -72,6 +72,14 @@ class ClassificationReport(Callback):
         acc = accuracy_score(y_true, y_pred)
         engine.metrics['val_acc'] = acc
         
+        # --- 计算 Top-K Acc ---
+        topk_acc = None
+        if self.top_k > 1:
+            _, indices = all_logits.topk(self.top_k, dim=1)
+            correct = indices.eq(all_targets.view(-1, 1).expand_as(indices))
+            topk_acc = correct.sum().item() / len(all_targets)
+            engine.metrics[f'val_acc_top{self.top_k}'] = topk_acc
+
         # --- B. 控制台打印 Classification Report ---
         report = classification_report(
             y_true, y_pred, 
@@ -79,7 +87,7 @@ class ClassificationReport(Callback):
             output_dict=True,
             zero_division=0
         )
-        self._print_rich_table(engine, report, acc)
+        self._print_rich_table(engine, report, acc, topk_acc)
 
         # --- C. 绘制 Confusion Matrix ---
         # 只有挂载了 TensorBoard Writer 才画图
@@ -88,7 +96,7 @@ class ClassificationReport(Callback):
             engine.writer.add_figure("Eval/Confusion_Matrix", fig, global_step=engine.epoch)
             plt.close(fig) # 关闭 release 内存
 
-    def _print_rich_table(self, engine, report: dict, acc: float):
+    def _print_rich_table(self, engine, report: dict, acc: float, topk_acc: Optional[float] = None):
         """用 Rich 打印漂亮的分类报告表格"""
         table = Table(title=f"[bold]Evaluation Report (Ep {engine.epoch+1})[/]")
         table.add_column("Class", style="cyan")
@@ -117,6 +125,8 @@ class ClassificationReport(Callback):
         
         engine.print(table)
         engine.print(f"[green]Accuracy: {acc*100:.2f}%[/]")
+        if topk_acc is not None:
+            engine.print(f"[green]Top-{self.top_k} Accuracy: {topk_acc*100:.2f}%[/]")
 
     def _plot_confusion_matrix(self, y_true, y_pred):
         """使用 Seaborn 绘制混淆矩阵"""

@@ -70,12 +70,15 @@ model = ConvNet()
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.1)
+
 trainer = Engine(
     model=model,
     criterion=criterion,
     optimizer=optimizer,
+    scheduler=scheduler,
     checkpoint_dir='./checkpoints/conv_cifar10',
     plugins=[ClassificationReport(num_classes=10, class_names=classes, top_k=5)]
-).init_board()
+)
 
 trainer.run(train_loader, test_loader, num_epochs=5)
