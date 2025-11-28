@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 from orbit.engine import Engine
 
-batch_size = 128
+batch_size = 32
 
 norm = transforms.Compose([
     transforms.ToTensor(),
@@ -64,8 +64,12 @@ class ConvNet(nn.Module):
         return x
 
 from orbit.plugin import ClassificationReport, EarlyStopping, GradientAccumulation, Warmup, Mentor, MemoryEstimator
+from orbit.utils import auto_initialize
+
 
 model = ConvNet()
+
+auto_initialize(model)
 
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
