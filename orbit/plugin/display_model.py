@@ -56,11 +56,16 @@ class ModelSummary(Callback):
         total_size_mb = total_params * 4 / (1024 ** 2)
 
         console.print(table)
+
+        if total_params > 0:
+            trainable_params = trainable_params/total_params
+        else:
+            trainable_params = 0
         
         # 打印汇总信息
         summary_table = Table(show_header=False, box=None)
         summary_table.add_row("Total Params:", f"[bold cyan]{total_params:,}[/]")
-        summary_table.add_row("Trainable Params:", f"[bold green]{trainable_params:,}[/] ({trainable_params/total_params:.1%})")
+        summary_table.add_row("Trainable Params:", f"[bold green]{trainable_params:,}[/] ({trainable_params:.1%})")
         summary_table.add_row("Non-trainable Params:", f"[dim]{total_params - trainable_params:,}[/]")
         summary_table.add_row("Est. Params Size (MB):", f"[bold blue]{total_size_mb:.2f} MB[/]")
         
