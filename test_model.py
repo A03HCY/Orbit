@@ -63,7 +63,7 @@ class ConvNet(nn.Module):
         x = self.fc3(x)
         return x
 
-from orbit.plugin import ClassificationReport, EarlyStopping, GradientAccumulation, Warmup, Mentor, MemoryEstimator
+from orbit.plugin import EarlyStopping, GradientAccumulation, Warmup, Mentor, MemoryEstimator
 from orbit.utils import auto_initialize
 
 
@@ -82,12 +82,11 @@ trainer = Engine(
     optimizer=optimizer,
     scheduler=scheduler,
     plugins=[
-        #ClassificationReport(num_classes=10, class_names=classes, top_k=5),
         EarlyStopping(monitor='val_acc', mode='max', patience=2),
         GradientAccumulation(steps=2),
         Warmup(warmup_epochs=2),
         Mentor(),
-        MemoryEstimator()
+        MemoryEstimator(verbose=False, alert_threshold='128mb', stop_threshold='150mb')
     ]
 ).set_checkpoint('./checkpoints/conv_cifar10')
 

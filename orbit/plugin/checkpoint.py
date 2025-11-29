@@ -142,7 +142,7 @@ class Checkpoint(Callback):
             if verbose:
                 # 使用相对路径显示，更简洁
                 rel_path = os.path.relpath(file_path)
-                engine.print(f"Saved checkpoint: [green]{rel_path}[/]", plugin='Checkpointing')
+                engine.print(f"Saved checkpoint: {rel_path}[/]", plugin='Checkpointing')
         except Exception as e:
             engine.print(f"[red]Failed to save checkpoint: {e}[/]", plugin='Checkpointing')
 
@@ -153,7 +153,7 @@ class Checkpoint(Callback):
             try:
                 os.remove(file_path)
                 if self.verbose:
-                    engine.print(f"[dim]Removed old checkpoint: [yellow]{filename}[/]", plugin='Checkpointing')
+                    engine.print(f"[dim]Removed old checkpoint: {filename}[/]", plugin='Checkpointing')
             except OSError as e:
                 engine.print(f"[red]Failed to remove checkpoint {filename}: {e}[/]", plugin='Checkpointing')
 

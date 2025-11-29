@@ -318,6 +318,12 @@ class Engine:
                 self._fire_event("on_epoch_start")
                 self._run_one_epoch(self.train_loader, prefix="Train", color="blue")
 
+                if self.stop_training:
+                    if self.epoch < self.num_epochs - 1:
+                        self.print("[yellow]Training stopped by plugin request.[/]", plugin='Engine')
+                        self._fire_event("on_requested_stop")
+                    break
+
                 # --- 2. Validation Loop ---
                 if self.val_loader and with_eval:
                     self.state = "EVAL"
@@ -343,7 +349,7 @@ class Engine:
                     if self.is_in_warmup():
                         lr_str += " [Warmup]"
 
-                msg = f"Epoch {self.epoch+1}/{self.num_epochs}"
+                msg = f"[dark_magenta]Epoch {self.epoch+1}/{self.num_epochs}"
                 if "train_loss" in self.metrics:
                     msg += f" | Train Loss: {self.metrics['train_loss']:.4f}"
                 if "val_loss" in self.metrics:
@@ -351,12 +357,6 @@ class Engine:
                 msg += lr_str
                 
                 self.print(msg, plugin='Engine')
-                
-                if self.stop_training:
-                    if self.epoch < self.num_epochs - 1:
-                        self.print("[yellow]Training stopped by plugin request.[/]", plugin='Engine')
-                        self._fire_event("on_requested_stop")
-                    break
                     
         except KeyboardInterrupt:
             self.print("[red][bold]Training interrupted by user.", plugin='Engine')
@@ -469,6 +469,8 @@ class Engine:
                 progress.update(task, advance=1, description=logs)
                 
                 self._fire_event("on_batch_end")
+                
+                if self.stop_training: break
         
         # 计算 epoch 平均 loss
         avg_loss = epoch_loss_sum / num_batches if num_batches > 0 else 0.0

@@ -1,9 +1,10 @@
+import gc
 import torch
 import torch.nn as nn
 from rich.panel import Panel
 from rich.table import Table
 from rich import box
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Union
 
 from orbit.callback import Callback
 
@@ -14,11 +15,84 @@ class MemoryEstimator(Callback):
     """
     显存预估插件。
     在训练开始前，通过运行一个虚拟 Batch 来预估显存使用峰值。
+    同时支持在训练过程中监控显存使用情况。
     """
-    def __init__(self, verbose: bool = True):
+    def __init__(self, verbose: bool = True, alert_threshold: Union[float, str, int] = 0.8, stop_threshold: Union[float, str, int] = 0.95, clean_interval: Optional[int] = None):
+        '''
+        Args:
+            verbose (bool): 是否打印预估报告。
+            alert_threshold (Union[float, str, int]): 警告阈值。
+                如果是 float <= 1.0，视为总显存的百分比 (例如 0.8 = 80%)。
+                如果是 str (例如 "4GB", "500MB") 或 int (字节数)，视为绝对值。
+            stop_threshold (Union[float, str, int]): 停止阈值。类型同上。
+            clean_interval (Optional[int]): 如果提供，则每隔多少个 Batch 执行一次显存清理 (gc.collect + empty_cache)。
+                这有助于解决显存缓慢泄漏的问题，但可能会轻微影响训练速度。
+        '''
         super().__init__()
         self.verbose = verbose
+        self.alert_threshold_arg = alert_threshold
+        self.stop_threshold_arg = stop_threshold
+        self.clean_interval = clean_interval
+        
+        self.alert_bytes = None
+        self.stop_bytes = None
+        
         self.has_run = False
+        self.has_alerted = False
+
+    def _parse_threshold(self, threshold: Union[float, str, int], total_capacity: int) -> int:
+        if isinstance(threshold, float):
+            return int(threshold * total_capacity)
+        if isinstance(threshold, int):
+            return threshold
+        if isinstance(threshold, str):
+            s = threshold.upper().strip()
+            if s.endswith('GB'):
+                return int(float(s[:-2]) * (1024**3))
+            elif s.endswith('MB'):
+                return int(float(s[:-2]) * (1024**2))
+            elif s.endswith('KB'):
+                return int(float(s[:-2]) * 1024)
+            elif s.endswith('B'):
+                return int(float(s[:-1]))
+            else:
+                try:
+                    return int(float(s))
+                except ValueError:
+                    pass
+        raise ValueError(f"Invalid memory threshold format: {threshold}")
+
+    def on_batch_start(self, engine: 'Engine'):
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
+    def on_batch_end(self, engine: 'Engine'):
+        if not torch.cuda.is_available():
+            return
+            
+        peak_memory = torch.cuda.max_memory_allocated()
+        total_capacity = torch.cuda.get_device_properties(engine.device).total_memory
+        
+        # 初始化阈值字节数
+        if self.stop_bytes is None:
+            self.stop_bytes = self._parse_threshold(self.stop_threshold_arg, total_capacity)
+        if self.alert_bytes is None:
+            self.alert_bytes = self._parse_threshold(self.alert_threshold_arg, total_capacity)
+        
+        # 格式化辅助函数
+        to_mb = lambda x: x / (1024 ** 2)
+        
+        if peak_memory > self.stop_bytes:
+            engine.print(f"[bold red]Memory usage ({to_mb(peak_memory):.2f} MB) exceeded critical threshold ({to_mb(self.stop_bytes):.2f} MB)! Stopping training.[/]", plugin='MemEst')
+            engine.stop_training = True
+        elif peak_memory > self.alert_bytes and not self.has_alerted:
+            engine.print(f"[yellow]Memory usage ({to_mb(peak_memory):.2f} MB) exceeded warning threshold ({to_mb(self.alert_bytes):.2f} MB).[/]", plugin='MemEst')
+            self.has_alerted = True
+
+        # 定期清理显存
+        if self.clean_interval and (engine.batch_idx + 1) % self.clean_interval == 0:
+            gc.collect()
+            torch.cuda.empty_cache()
 
     def on_train_start(self, engine: 'Engine'):
         if self.has_run:
@@ -47,7 +121,8 @@ class MemoryEstimator(Callback):
             self.has_run = True
 
     def _estimate(self, engine: 'Engine'):
-        engine.print("[cyan]Running dry run for memory estimation...[/]", plugin='MemEst')
+        if self.verbose:
+            engine.print("Running dry run for memory estimation...[/]", plugin='MemEst')
         
         # 1. 获取一个 Batch 的数据
         try:
