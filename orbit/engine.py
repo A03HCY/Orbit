@@ -5,19 +5,24 @@ import torch
 import torch.nn as nn
 from typing import Any, List, Optional, Union, Dict, Tuple
 
-try:
-    from torch.utils.tensorboard import SummaryWriter
+try: from torch.utils.tensorboard import SummaryWriter
 except: pass
 
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, MofNCompleteColumn
 from rich.console import Console
 
-from .callback import Callback 
+from orbit.callback import Callback 
 from orbit.plugin.checkpoint import Checkpoint
 from orbit.plugin.board import Board
 from orbit.plugin.display_model import ModelSummary
 
 class Engine:
+    '''训练循环控制器，负责协调模型训练、验证及回调事件。
+
+    Engine 封装了 PyTorch 的训练循环，提供了插件机制（Callback），
+    支持自动混合精度训练（AMP）、梯度裁剪、梯度累积、Checkpoint 保存、
+    TensorBoard 可视化等功能。
+    '''
 
     class _OutLogs:
         def __init__(self, engine: 'Engine'):
@@ -42,6 +47,20 @@ class Engine:
         checkpoint_dir: str = None,
         console: Console = None,
     ):
+        '''初始化 Engine 实例。
+
+        Args:
+            model (nn.Module): 要训练的 PyTorch 模型。
+            optimizer (torch.optim.Optimizer, optional): 优化器。如果为 None，则需要在其他地方（如插件）手动处理或稍后赋值。
+            criterion (nn.Module, optional): 损失函数。如果为 None，则假设模型输出包含 loss 或自定义 loss 计算。
+            device (Optional[str], optional): 运行设备 ('cpu', 'cuda', 'cuda:0' 等)。如果为 None，则自动检测。
+            use_amp (bool, optional): 是否启用自动混合精度 (Automatic Mixed Precision) 训练。默认为 False。
+            grad_clip_norm (float, optional): 梯度裁剪的范数阈值。如果为 None，则不进行梯度裁剪。
+            scheduler (Optional[torch.optim.lr_scheduler._LRScheduler], optional): 学习率调度器。
+            plugins (List[Callback], optional): 初始化时要挂载的回调插件列表。
+            checkpoint_dir (str, optional): 快速设置 Checkpoint 保存目录的快捷参数。
+            console (Console, optional): 用于输出日志的 Rich Console 实例。如果为 None，则创建一个新的。
+        '''
         # --- 基础组件 ---
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -103,6 +122,13 @@ class Engine:
         self._fire_event("on_init")
     
     def is_in_warmup(self) -> bool:
+        '''检查当前是否处于 Warmup 阶段。
+
+        通过检查已挂载插件中是否存在 Warmup 插件，并判断当前全局步数是否在 Warmup 范围内。
+
+        Returns:
+            bool: 如果处于 Warmup 阶段返回 True，否则返回 False。
+        '''
         for p in self.plugins:
             if p.__class__.__name__ == 'Warmup' and hasattr(p, 'total_warmup_steps'):
                 if self.global_step <= p.total_warmup_steps:
@@ -110,20 +136,31 @@ class Engine:
         return False
 
     def init_board(self, log_dir: str = 'runs') -> 'Engine':
+        '''初始化 TensorBoard 可视化插件 (Board)。
+
+        Args:
+            log_dir (str, optional): TensorBoard 日志保存目录。默认为 'runs'。
+
+        Returns:
+            Engine: 返回 Engine 实例自身以支持链式调用。
+        '''
         board = Board(name=self.model_name, log_dir=log_dir)
         self.attach(board, init=True)
         return self
 
     def set_checkpoint(self, dir: str, name: Optional[str] = None, **kwargs) -> 'Engine':
-        """
-        配置 Checkpoint 插件。
-        如果已存在 Checkpoint 插件，将被替换。
-        
+        '''配置 Checkpoint 插件。
+
+        如果已存在 Checkpoint 插件，将被新配置替换。
+
         Args:
-            dir (str): 保存目录。
-            name (str): 模型名称前缀。如果为 None，则使用 model_name。
-            **kwargs: 传递给 Checkpoint 构造函数的其他参数 (monitor, save_top_k 等)。
-        """
+            dir (str): 模型保存目录。
+            name (str, optional): 模型名称前缀。如果为 None，则使用 model_name。
+            **kwargs: 传递给 Checkpoint 构造函数的其他参数 (如 monitor, save_top_k, mode 等)。
+
+        Returns:
+            Engine: 返回 Engine 实例自身以支持链式调用。
+        '''
         if name is None:
             name = self.model_name
             
@@ -145,11 +182,14 @@ class Engine:
         self.console.print(' ' + '─' * 15 + char + '─' * 35)
     
     def print(self, *args, plugin: Optional[str] = None, **kwargs):
-        """
-        统一打印方法。
+        '''统一日志打印方法，支持插件前缀。
+
         Args:
-            plugin (str): 插件名称。如果提供，将以固定宽度对齐打印。
-        """
+            *args: 要打印的内容。
+            plugin (str, optional): 插件名称。如果提供，将以固定宽度和特定颜色打印前缀，
+                用于区分不同来源的日志。
+            **kwargs: 传递给 console.print 的其他参数。
+        '''
         if plugin:
             # 宽度 15, 右对齐, 青色加粗
             prefix = f"[bold cyan]{plugin:>15}[/] │"
@@ -157,7 +197,17 @@ class Engine:
         else:
             self.console.print(*args, **kwargs)
     
-    def attach(self, plugin: Union[Callback, List[Callback]]=None, init=False):
+    def attach(self, plugin: Union[Callback, List[Callback]] = None, init: bool = False):
+        '''挂载一个或多个插件到 Engine。
+
+        Args:
+            plugin (Union[Callback, List[Callback]], optional): 要挂载的插件或插件列表。
+            init (bool, optional): 是否立即调用插件的 on_init 方法。
+                通常在 Engine 初始化之后动态添加插件时设置为 True。默认为 False。
+
+        Raises:
+            ValueError: 如果传入的对象不是 Callback 实例。
+        '''
         if not plugin: return
         if isinstance(plugin, Callback):
             plugin = [plugin]
@@ -169,7 +219,13 @@ class Engine:
             self.plugins.append(p)
 
     def _fire_event(self, event_name: str):
-        """触发所有 Callback 的对应方法"""
+        '''触发所有已挂载插件的对应事件方法 (内部方法)。
+
+        按插件挂载顺序依次调用。
+
+        Args:
+            event_name (str): 要触发的事件名称 (如 'on_epoch_start')。
+        '''
         for cb in self.plugins:
             method = getattr(cb, event_name, None)
             if method:
@@ -179,7 +235,14 @@ class Engine:
                 method(self) 
 
     def _process_batch_data(self, batch_data: Any):
-        """将数据移动到设备"""
+        '''处理 Batch 数据并将其移动到指定设备 (内部方法)。
+
+        支持 Tensor, List[Tensor], Dict[str, Tensor] 等常见格式。
+        自动解析并设置 self.data 和 self.target。
+
+        Args:
+            batch_data (Any): DataLoader 产生的一个 Batch 数据。
+        '''
         if isinstance(batch_data, (list, tuple)):
             batch_data = [x.to(self.device) if isinstance(x, torch.Tensor) else x for x in batch_data]
             if len(batch_data) == 2:
@@ -197,8 +260,24 @@ class Engine:
             self.data = batch_data.to(self.device)
             self.target = None
 
-    def run(self, train_loader, val_loader=None, num_epochs=10, start_epoch=None, with_eval=True):
-        """主要的入口方法"""
+    def run(
+        self,
+        train_loader: Any,
+        val_loader: Optional[Any] = None,
+        num_epochs: int = 10,
+        start_epoch: Optional[int] = None,
+        with_eval: bool = True
+    ):
+        '''启动训练循环。
+
+        Args:
+            train_loader (Any): 训练数据加载器 (通常是 torch.utils.data.DataLoader)。
+            val_loader (Optional[Any], optional): 验证数据加载器。
+            num_epochs (int, optional): 总训练轮数。默认为 10。
+            start_epoch (Optional[int], optional): 起始 Epoch 索引。
+                如果为 None，则从 0 开始。用于断点续训。
+            with_eval (bool, optional): 是否在每个 Epoch 结束后执行验证。默认为 True。
+        '''
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.num_epochs = num_epochs
@@ -267,7 +346,16 @@ class Engine:
             self._fire_event("on_train_end")
             self._print_edge(top=False)
 
-    def _run_one_epoch(self, loader, prefix="Train", color="blue"):
+    def _run_one_epoch(self, loader: Any, prefix: str = "Train", color: str = "blue"):
+        '''执行单个 Epoch 的循环 (内部方法)。
+
+        负责迭代 DataLoader，执行前向传播、反向传播（仅训练）、梯度更新及进度显示。
+
+        Args:
+            loader (Any): 数据加载器。
+            prefix (str, optional): 进度条前缀显示文本。默认为 "Train"。
+            color (str, optional): 进度条前缀颜色。默认为 "blue"。
+        '''
         is_train = (self.state == "TRAIN")
         self.model.train() if is_train else self.model.eval()
         
