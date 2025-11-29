@@ -11,7 +11,7 @@ except: pass
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, MofNCompleteColumn
 from rich.console import Console
 
-from orbit.callback import Callback 
+from orbit.callback import Callback, Forward
 from orbit.plugin.checkpoint import Checkpoint
 from orbit.plugin.board import Board
 from orbit.plugin.display_model import ModelSummary
@@ -45,6 +45,7 @@ class Engine:
         grad_clip_norm: float = None,
         scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         plugins: List[Callback] = None,
+        forward_step: Optional[Forward] = None,
         checkpoint_dir: str = None,
         console: Console = None,
     ):
@@ -60,6 +61,7 @@ class Engine:
             grad_clip_norm (float, optional): 梯度裁剪的范数阈值。如果为 None，则不进行梯度裁剪。
             scheduler (Optional[torch.optim.lr_scheduler._LRScheduler], optional): 学习率调度器。
             plugins (List[Callback], optional): 初始化时要挂载的回调插件列表。
+            forward_step (Optional[Forward], optional): 自定义前向传播和 Loss 计算逻辑的实现。
             checkpoint_dir (str, optional): 快速设置 Checkpoint 保存目录的快捷参数。
             console (Console, optional): 用于输出日志的 Rich Console 实例。如果为 None，则创建一个新的。
         '''
@@ -90,6 +92,7 @@ class Engine:
         self.use_amp = use_amp
         self.grad_clip_norm = grad_clip_norm
         self.scheduler = scheduler
+        self.forward_step = forward_step
         self.scaler = torch.amp.GradScaler('cuda', enabled=use_amp) 
 
         # --- 交互与回调 ---
@@ -402,19 +405,22 @@ class Engine:
 
                 # --- Forward ---
                 with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
-                    if isinstance(self.data, (list, tuple)):
-                        self.output = self.model(*self.data)
+                    if self.forward_step:
+                        self.loss = self.forward_step.forward(self, self.data, self.target)
                     else:
-                        self.output = self.model(self.data)
+                        if isinstance(self.data, (list, tuple)):
+                            self.output = self.model(*self.data)
+                        else:
+                            self.output = self.model(self.data)
 
-                    if self.output is None:
-                        raise ValueError("Model returned None! Please check your model's forward() method.")
-                    
-                    if self.criterion and self.target is not None:
-                        self.target = self.target
-                        self.loss = self.criterion(self.output, self.target)
-                    else:
-                        self.loss = torch.tensor(0.0, device=self.device)
+                        if self.output is None:
+                            raise ValueError("Model returned None! Please check your model's forward() method.")
+                        
+                        if self.criterion and self.target is not None:
+                            self.target = self.target
+                            self.loss = self.criterion(self.output, self.target)
+                        else:
+                            self.loss = torch.tensor(0.0, device=self.device)
                     
                     loss_val = self.loss.item()
                     epoch_loss_sum += loss_val
