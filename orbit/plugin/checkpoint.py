@@ -121,17 +121,20 @@ class Checkpoint(Callback):
         if self.monitor:
             engine.meta[self._meta_key] = {'best_k_models': self.best_k_models}
 
+        # 获取原始模型 (去除 DataParallel 包装) 以保证 Checkpoint 通用性
+        raw_model = engine.unwrap_model()
+
         state = {
             'epoch': engine.epoch,
             'global_step': engine.global_step,
-            'model_state_dict': engine.model.state_dict(),
+            'model_state_dict': raw_model.state_dict(),
             'optimizer_state_dict': engine.optimizer.state_dict() if engine.optimizer else None,
             'scheduler_state_dict': engine.scheduler.state_dict() if engine.scheduler else None,
             'scaler_state_dict': engine.scaler.state_dict() if engine.scaler else None,
             'meta': engine.meta,
         }
         if self.save_weights_only:
-            state = engine.model.state_dict()
+            state = raw_model.state_dict()
         
         file_path = os.path.join(self.path, filename)
         try:
@@ -161,11 +164,14 @@ class Checkpoint(Callback):
             # 加载到设备
             checkpoint = torch.load(file_path, map_location=engine.device)
             
+            # 获取原始模型以进行加载
+            raw_model = engine.unwrap_model()
+
             # 1. 加载模型权重
             if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                engine.model.load_state_dict(checkpoint['model_state_dict'])
+                raw_model.load_state_dict(checkpoint['model_state_dict'])
             else:
-                engine.model.load_state_dict(checkpoint)
+                raw_model.load_state_dict(checkpoint)
                 engine.print("[yellow]Loaded model weights only (legacy format).[/]", plugin='Checkpointing')
                 return 
             

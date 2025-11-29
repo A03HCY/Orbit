@@ -40,6 +40,7 @@ class Engine:
         optimizer: torch.optim.Optimizer = None,
         criterion: nn.Module = None,
         device: Optional[str] = None,
+        device_ids: Optional[List[int]] = None,
         use_amp: bool = False,
         grad_clip_norm: float = None,
         scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
@@ -54,6 +55,7 @@ class Engine:
             optimizer (torch.optim.Optimizer, optional): 优化器。如果为 None，则需要在其他地方（如插件）手动处理或稍后赋值。
             criterion (nn.Module, optional): 损失函数。如果为 None，则假设模型输出包含 loss 或自定义 loss 计算。
             device (Optional[str], optional): 运行设备 ('cpu', 'cuda', 'cuda:0' 等)。如果为 None，则自动检测。
+            device_ids (Optional[List[int]], optional): GPU 设备 ID 列表。如果提供且长度 > 1，将启用 DataParallel。
             use_amp (bool, optional): 是否启用自动混合精度 (Automatic Mixed Precision) 训练。默认为 False。
             grad_clip_norm (float, optional): 梯度裁剪的范数阈值。如果为 None，则不进行梯度裁剪。
             scheduler (Optional[torch.optim.lr_scheduler._LRScheduler], optional): 学习率调度器。
@@ -62,13 +64,25 @@ class Engine:
             console (Console, optional): 用于输出日志的 Rich Console 实例。如果为 None，则创建一个新的。
         '''
         # --- 基础组件 ---
-        if device is None:
+        self.device_ids = device_ids
+
+        if self.device_ids and len(self.device_ids) > 0:
+            self.device = torch.device(f"cuda:{self.device_ids[0]}")
+        elif device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(device)
 
-        self.model = model.to(self.device)
-        self.model_name = self.model.__class__.__name__
+        # 移动模型到主设备
+        model = model.to(self.device)
+
+        # 多显卡处理 (DataParallel)
+        if self.device_ids and len(self.device_ids) > 1:
+            self.model = nn.DataParallel(model, device_ids=self.device_ids)
+        else:
+            self.model = model
+
+        self.model_name = self.unwrap_model().__class__.__name__
         self.optimizer = optimizer
         self.criterion = criterion
         
@@ -121,6 +135,12 @@ class Engine:
         # 触发初始化回调
         self._fire_event("on_init")
     
+    def unwrap_model(self) -> nn.Module:
+        '''获取原始模型对象 (去除 DataParallel/DistributedDataParallel 包装)。'''
+        if isinstance(self.model, (nn.DataParallel, nn.parallel.DistributedDataParallel)):
+            return self.model.module
+        return self.model
+
     def is_in_warmup(self) -> bool:
         '''检查当前是否处于 Warmup 阶段。
 
