@@ -10,3 +10,9 @@ from .initialization import (
     AutoInitializer,
     auto_initialize
 )
+from .freeze import (
+    set_trainable,
+    freeze_layers,
+    unfreeze_layers,
+    get_trainable_params
+)
