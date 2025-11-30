@@ -4,7 +4,7 @@ from rich.console import Console
 from typing import TYPE_CHECKING
 import rich.box as box
 
-from orbit.callback import Callback
+from orbit.callback import Callback, Event
 
 if TYPE_CHECKING:
     from ..engine import Engine
@@ -14,10 +14,11 @@ class ModelSummary(Callback):
         super().__init__()
         self.max_depth = max_depth
 
-    def on_init(self, engine: "Engine"):
+    def on_init(self, event: Event):
         """
         Engine 初始化时，自动打印模型结构
         """
+        engine = event.engine
         self.display(engine.model, engine.console)
 
     def display(self, model: nn.Module, console: Console):

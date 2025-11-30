@@ -6,7 +6,7 @@ from rich.table import Table
 from rich import box
 from typing import TYPE_CHECKING, Optional, Union
 
-from orbit.callback import Callback
+from orbit.callback import Callback, Event
 
 if TYPE_CHECKING:
     from orbit.engine import Engine
@@ -62,14 +62,15 @@ class MemoryEstimator(Callback):
                     pass
         raise ValueError(f"Invalid memory threshold format: {threshold}")
 
-    def on_batch_start(self, engine: 'Engine'):
+    def on_batch_start(self, event: Event):
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
 
-    def on_batch_end(self, engine: 'Engine'):
+    def on_batch_end(self, event: Event):
         if not torch.cuda.is_available():
             return
-            
+        
+        engine = event.engine
         peak_memory = torch.cuda.max_memory_allocated()
         total_capacity = torch.cuda.get_device_properties(engine.device).total_memory
         
@@ -84,7 +85,7 @@ class MemoryEstimator(Callback):
         
         if peak_memory > self.stop_bytes:
             engine.print(f"[bold red]Memory usage ({to_mb(peak_memory):.2f} MB) exceeded critical threshold ({to_mb(self.stop_bytes):.2f} MB)! Stopping training.[/]", plugin='MemEst')
-            engine.stop_training = True
+            engine.stop(source="MemoryEstimator", reason=f"Memory usage exceeded critical threshold ({to_mb(self.stop_bytes):.2f} MB)")
         elif peak_memory > self.alert_bytes and not self.has_alerted:
             engine.print(f"[yellow]Memory usage ({to_mb(peak_memory):.2f} MB) exceeded warning threshold ({to_mb(self.alert_bytes):.2f} MB).[/]", plugin='MemEst')
             self.has_alerted = True
@@ -94,10 +95,11 @@ class MemoryEstimator(Callback):
             gc.collect()
             torch.cuda.empty_cache()
 
-    def on_train_start(self, engine: 'Engine'):
+    def on_train_start(self, event: Event):
         if self.has_run:
             return
-
+        
+        engine = event.engine
         if not torch.cuda.is_available():
             if self.verbose:
                 engine.print("[yellow]CUDA not available. Skipping memory estimation.[/]", plugin='MemEst')

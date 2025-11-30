@@ -1,6 +1,6 @@
 import numpy as np
 from typing import TYPE_CHECKING
-from orbit.callback import Callback
+from orbit.callback import Callback, Event
 
 if TYPE_CHECKING:
     from orbit.engine import Engine
@@ -40,8 +40,9 @@ class EarlyStopping(Callback):
         # 内部状态 Key
         self._meta_key = 'early_stopping'
 
-    def on_train_start(self, engine: 'Engine'):
+    def on_train_start(self, event: Event):
         """尝试从 engine.meta 恢复状态"""
+        engine = event.engine
         if self._meta_key in engine.meta:
             state = engine.meta[self._meta_key]
             self.best_score = state.get('best_score', self.best_score)
@@ -49,8 +50,9 @@ class EarlyStopping(Callback):
             if self.verbose:
                 engine.print(f"[cyan]Resumed: Best Score={self.best_score:.4f}, Wait={self.wait_count}/{self.patience}[/]", plugin='EarlyStopping')
 
-    def on_epoch_end(self, engine: 'Engine'):
+    def on_epoch_end(self, event: Event):
         """每 Epoch 检查指标"""
+        engine = event.engine
         # 0. 如果处于 Warmup 阶段，跳过 Early Stopping
         if engine.is_in_warmup():
             if self.verbose:
@@ -89,7 +91,7 @@ class EarlyStopping(Callback):
                 engine.print(f"[yellow]{self.monitor} did not improve ({self.wait_count}/{self.patience}). Best: {self.best_score:.4f}[/]", plugin='EarlyStopping')
                 
             if self.wait_count >= self.patience:
-                engine.stop_training = True
+                engine.stop(source="EarlyStopping", reason=f"No improvement in {self.patience} epochs")
                 engine.print(f"[red][bold]Stopping training (no improvement in {self.patience} epochs).[/]", plugin='EarlyStopping')
 
         # 4. 保存状态到 meta，以便 Checkpoint 持久化

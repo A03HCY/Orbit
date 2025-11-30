@@ -1,5 +1,5 @@
 from typing import Optional, List, TYPE_CHECKING
-from orbit.callback import Callback
+from orbit.callback import Callback, Event
 
 if TYPE_CHECKING:
     from orbit.engine import Engine
@@ -43,10 +43,11 @@ class Warmup(Callback):
         if self.mode == 'noam' and self.model_dim is None:
             raise ValueError("Noam mode requires 'model_dim' to be specified.")
 
-    def on_train_start(self, engine: 'Engine'):
+    def on_train_start(self, event: Event):
         """
         训练开始时计算总预热步数并记录初始学习率
         """
+        engine = event.engine
         if not engine.optimizer:
             raise ValueError("Warmup plugin requires an optimizer in the Engine.")
 
@@ -77,10 +78,11 @@ class Warmup(Callback):
             if self.mode != 'noam':
                 engine.print(f"[magenta]Steps: {self.total_warmup_steps} (Epochs: {self.warmup_epochs})[/]", plugin='Warmup')
 
-    def on_batch_start(self, engine: 'Engine'):
+    def on_batch_start(self, event: Event):
         """
         每个 Batch 开始前调整学习率
         """
+        engine = event.engine
         # 当前步数 (从 1 开始计算，方便公式)
         current_step = engine.global_step + 1
         

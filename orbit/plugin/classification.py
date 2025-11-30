@@ -6,7 +6,7 @@ from rich.table import Table
 from typing import List, Optional, TYPE_CHECKING
 import rich.box as box
 
-from orbit.callback import Callback
+from orbit.callback import Callback, Event
 if TYPE_CHECKING:
     from ..engine import Engine
 
@@ -37,13 +37,14 @@ class ClassificationReport(Callback):
         self.preds = []
         self.targets = []
 
-    def on_eval_start(self, engine: "Engine"):
+    def on_eval_start(self, event: Event):
         """每轮验证开始前清空缓存"""
         self.preds = []
         self.targets = []
 
-    def on_batch_end(self, engine: "Engine"):
+    def on_batch_end(self, event: Event):
         """收集验证阶段的预测结果"""
+        engine = event.engine
         if engine.state == "EVAL":
             # 假设 engine.output 是 logits [Batch, NumClasses]
             # 假设 engine.target 是 labels [Batch]
@@ -53,9 +54,10 @@ class ClassificationReport(Callback):
             self.preds.append(engine.output.detach().cpu()) 
             self.targets.append(engine.target.detach().cpu())
 
-    def on_eval_end(self, engine: "Engine"):
+    def on_eval_end(self, event: Event):
         """验证结束后计算指标并绘图"""
         if not self.preds: return
+        engine = event.engine
 
         # 1. 拼接所有 Batch
         all_logits = torch.cat(self.preds)  # [N, C]

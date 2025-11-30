@@ -11,7 +11,7 @@ except: pass
 from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, MofNCompleteColumn
 from rich.console import Console
 
-from orbit.callback import Callback, Forward
+from orbit.callback import Callback, Forward, Event
 from orbit.plugin.checkpoint import Checkpoint
 from orbit.plugin.board import Board
 from orbit.plugin.display_model import ModelSummary
@@ -117,6 +117,8 @@ class Engine:
         
         self.state = "IDLE"      # TRAIN / EVAL
         self.stop_training = False # 插件可以通过设置此标志为 True 来停止训练
+        self.stop_source: Optional[str] = None
+        self.stop_reason: Optional[str] = None
         self.accumulation_steps = 1 # 梯度累积步数
 
         self.exception: Optional[Exception] = None
@@ -137,6 +139,17 @@ class Engine:
 
         # 触发初始化回调
         self._fire_event("on_init")
+
+    def stop(self, source: str = "User", reason: str = "Unknown"):
+        '''请求停止训练。
+
+        Args:
+            source (str): 停止请求的来源 (例如 "EarlyStopping", "User", "KeyboardInterrupt")。
+            reason (str): 停止的具体原因。
+        '''
+        self.stop_training = True
+        self.stop_source = source
+        self.stop_reason = reason
     
     def unwrap_model(self) -> nn.Module:
         '''获取原始模型对象 (去除 DataParallel/DistributedDataParallel 包装)。'''
@@ -193,8 +206,9 @@ class Engine:
         # 2. 创建新插件
         ckpt = Checkpoint(name=name, path=dir, **kwargs)
         
-        # 3. 调用 ckpt.on_init(self)
-        ckpt.on_init(self)
+        # 3. 调用 ckpt.on_init(event)
+        # 注意：这里我们手动构造 Event，因为此时可能不在 run 循环中
+        ckpt.on_init(Event(engine=self, name="on_init"))
         
         # 4. 挂载
         self.attach(ckpt)
@@ -238,24 +252,26 @@ class Engine:
             if not isinstance(p, Callback):
                 raise ValueError(f"Plugin {p} is not a Callback!")
             if p in self.plugins: continue
-            if init: p.on_init(self)
+            if init: p.on_init(Event(engine=self, name="on_init"))
             self.plugins.append(p)
 
-    def _fire_event(self, event_name: str):
+    def _fire_event(self, event_name: str, **kwargs):
         '''触发所有已挂载插件的对应事件方法 (内部方法)。
 
         按插件挂载顺序依次调用。
 
         Args:
             event_name (str): 要触发的事件名称 (如 'on_epoch_start')。
+            **kwargs: 传递给 Event 构造函数的其他参数 (如 source, reason)。
         '''
+        event = Event(engine=self, name=event_name, **kwargs)
         for cb in self.plugins:
             method = getattr(cb, event_name, None)
             if method:
                 # [修改] 移除 try-except pass。
                 # 我们需要看到 Callback 里的错误，否则调试是地狱。
                 # 如果一定要防御性编程，可以使用 console.print_exception()
-                method(self) 
+                method(event) 
 
     def _process_batch_data(self, batch_data: Any):
         '''处理 Batch 数据并将其移动到指定设备 (内部方法)。
@@ -320,8 +336,10 @@ class Engine:
 
                 if self.stop_training:
                     if self.epoch < self.num_epochs - 1:
-                        self.print("[yellow]Training stopped by plugin request.[/]", plugin='Engine')
-                        self._fire_event("on_requested_stop")
+                        source = self.stop_source if self.stop_source else "Plugin"
+                        reason = self.stop_reason if self.stop_reason else "Unknown"
+                        self.print(f"[yellow]Training stopped by {source}: {reason}[/]", plugin='Engine')
+                        self._fire_event("on_requested_stop", source=source, reason=reason)
                     break
 
                 # --- 2. Validation Loop ---
@@ -360,7 +378,8 @@ class Engine:
                     
         except KeyboardInterrupt:
             self.print("[red][bold]Training interrupted by user.", plugin='Engine')
-            self._fire_event("on_requested_stop")
+            self.stop(source="User", reason="KeyboardInterrupt")
+            self._fire_event("on_requested_stop", source="User", reason="KeyboardInterrupt")
         except Exception as e:
             self.exception = e
             self.console.print_exception()

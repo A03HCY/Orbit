@@ -1,7 +1,7 @@
 import os
 import torch
 from typing import TYPE_CHECKING, List, Tuple
-from orbit.callback import Callback
+from orbit.callback import Callback, Event
 
 if TYPE_CHECKING:
     from orbit.engine import Engine
@@ -45,12 +45,13 @@ class Checkpoint(Callback):
         # 内部状态 Key
         self._meta_key = 'checkpoint_callback'
 
-    def on_init(self, engine: 'Engine'):
+    def on_init(self, event: Event):
         """
         1. 创建文件夹
         2. 尝试恢复 Checkpoint 状态 (best_k_models)
         3. 尝试加载 last checkpoint
         """
+        engine = event.engine
         if not os.path.exists(self.path):
             os.makedirs(self.path, exist_ok=True)
         
@@ -65,12 +66,13 @@ class Checkpoint(Callback):
         else:
             engine.print(f"[yellow]Warning: Resume checkpoint '{load_path}' not found. Starting from scratch.[/]", plugin='Checkpointing')
 
-    def on_epoch_end(self, engine: 'Engine'):
+    def on_epoch_end(self, event: Event):
         """
         每个 Epoch 结束时：
         1. 保存 last
         2. 如果设置了 monitor，保存 top_k
         """
+        engine = event.engine
         # 1. Save Last
         if self.save_last:
             self._save(engine, f"{self.name}_last.pt", verbose=False) # last 不需要每次都啰嗦
@@ -142,7 +144,7 @@ class Checkpoint(Callback):
             if verbose:
                 # 使用相对路径显示，更简洁
                 rel_path = os.path.relpath(file_path)
-                engine.print(f"Saved checkpoint: {rel_path}[/]", plugin='Checkpointing')
+                engine.print(f"Saved checkpoint: {rel_path}", plugin='Checkpointing')
         except Exception as e:
             engine.print(f"[red]Failed to save checkpoint: {e}[/]", plugin='Checkpointing')
 

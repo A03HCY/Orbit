@@ -4,7 +4,7 @@ import os
 import locale
 from typing import Optional, List, TYPE_CHECKING, Tuple, Dict
 from rich.panel import Panel
-from orbit.callback import Callback
+from orbit.callback import Callback, Event
 
 if TYPE_CHECKING:
     from orbit.engine import Engine
@@ -88,7 +88,8 @@ class Mentor(Callback):
         except KeyError:
             return template
 
-    def on_train_start(self, engine: 'Engine'):
+    def on_train_start(self, event: Event):
+        engine = event.engine
         # 1. 检查 Warmup
         for p in engine.plugins:
             if p.__class__.__name__ == 'Warmup':
@@ -110,7 +111,8 @@ class Mentor(Callback):
             msg = self._t("mentor_watching", eff_bs=eff_bs, bs=self.batch_size, accum=self.accum_steps)
             engine.print(msg, plugin='Mentor')
 
-    def on_epoch_end(self, engine: 'Engine'):
+    def on_epoch_end(self, event: Event):
+        engine = event.engine
         current_loss = engine.metrics.get('train_loss')
         val_loss = engine.metrics.get('val_loss')
         

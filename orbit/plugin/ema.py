@@ -1,6 +1,6 @@
 from copy import deepcopy
 import torch
-from orbit.callback import Callback
+from orbit.callback import Callback, Event
 from typing import TYPE_CHECKING, Dict
 
 if TYPE_CHECKING:
@@ -27,17 +27,19 @@ class EMA(Callback):
         # 内部状态 Key，用于 Checkpoint 保存/恢复
         self._meta_key = 'ema_state'
 
-    def on_init(self, engine: 'Engine'):
+    def on_init(self, event: Event):
         # 初始化影子权重 (Shadow Weights)
         # 注意：此时模型应该已经加载到了正确的 Device 上
+        engine = event.engine
         for name, param in engine.model.named_parameters():
             if param.requires_grad:
                 self.shadow[name] = param.data.clone()
         
         engine.print(f"[magenta]Enabled (decay={self.decay})[/]", plugin='EMA')
 
-    def on_train_start(self, engine: 'Engine'):
+    def on_train_start(self, event: Event):
         """尝试从 Checkpoint 恢复 EMA 状态"""
+        engine = event.engine
         if self._meta_key in engine.meta:
             saved_shadow = engine.meta[self._meta_key]
             # 确保加载的权重在正确的设备上
@@ -46,16 +48,18 @@ class EMA(Callback):
                     self.shadow[k] = v.to(engine.device)
             engine.print(f"[green]Resumed EMA state from checkpoint[/]", plugin='EMA')
 
-    def on_batch_end(self, engine: 'Engine'):
+    def on_batch_end(self, event: Event):
         """每个 Batch 结束后更新 EMA 权重"""
+        engine = event.engine
         if engine.state == 'TRAIN' and engine.global_step >= self.start_step:
             for name, param in engine.model.named_parameters():
                 if param.requires_grad:
                     # shadow = decay * shadow + (1 - decay) * param
                     self.shadow[name].data.mul_(self.decay).add_(param.data, alpha=1.0 - self.decay)
 
-    def on_eval_start(self, engine: 'Engine'):
+    def on_eval_start(self, event: Event):
         """评估开始前：备份当前权重，应用 EMA 权重"""
+        engine = event.engine
         if engine.global_step < self.start_step:
             return
 
@@ -71,8 +75,9 @@ class EMA(Callback):
         
         engine.print("[dim]Switched to EMA weights for evaluation[/]", plugin='EMA')
 
-    def on_eval_end(self, engine: 'Engine'):
+    def on_eval_end(self, event: Event):
         """评估结束后：恢复原始训练权重"""
+        engine = event.engine
         if not self.backup:
             return
 
@@ -83,9 +88,10 @@ class EMA(Callback):
         self.backup = {} # 清空备份
         engine.print("[dim]Restored training weights[/]", plugin='EMA')
 
-    def on_epoch_end(self, engine: 'Engine'):
+    def on_epoch_end(self, event: Event):
         """
         Epoch 结束时：将 EMA 状态存入 meta，以便 Checkpoint 插件保存。
         注意：这会增加 Checkpoint 文件的大小 (约 2 倍模型大小)。
         """
+        engine = event.engine
         engine.meta[self._meta_key] = self.shadow

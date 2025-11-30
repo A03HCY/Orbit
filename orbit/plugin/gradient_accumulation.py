@@ -1,5 +1,5 @@
 from typing import TYPE_CHECKING
-from orbit.callback import Callback
+from orbit.callback import Callback, Event
 
 if TYPE_CHECKING:
     from orbit.engine import Engine
@@ -22,10 +22,11 @@ class GradientAccumulation(Callback):
         if self.steps < 1:
             raise ValueError("Gradient accumulation steps must be >= 1")
 
-    def on_init(self, engine: 'Engine'):
+    def on_init(self, event: Event):
         """
         在初始化阶段配置 Engine
         """
+        engine = event.engine
         engine.accumulation_steps = self.steps
         if self.steps > 1:
             engine.print(f"[magenta]Enabled: steps={self.steps}[/]", plugin='GradAccum')
