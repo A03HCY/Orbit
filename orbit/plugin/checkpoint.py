@@ -16,6 +16,7 @@ class Checkpoint(Callback):
         mode: str = 'min',         # 默认 loss 越小越好
         save_top_k: int = 1,
         save_last: bool = True,
+        every_n_train_steps: int = None,
         verbose: bool = True
     ):
         """
@@ -27,6 +28,7 @@ class Checkpoint(Callback):
             mode (str): 'min' (越小越好) 或 'max' (越大越好)。
             save_top_k (int): 保存最好的 K 个模型。设为 0 则禁用 Top-K 保存。
             save_last (bool): 是否总是保存 '{name}_last.pt'。
+            every_n_train_steps (int): 每隔多少个训练步保存一次。
             verbose (bool): 是否打印保存信息。
         """
         super().__init__()
@@ -37,10 +39,14 @@ class Checkpoint(Callback):
         self.mode = mode
         self.save_top_k = save_top_k
         self.save_last = save_last
+        self.every_n_train_steps = every_n_train_steps
         self.verbose = verbose
         
         # 维护 Top-K 模型列表: [(score, filename), ...]
         self.best_k_models: List[Tuple[float, str]] = []
+        
+        # 记录上一个 Step Checkpoint 文件名，用于删除
+        self.last_step_checkpoint: str = None
         
         # 内部状态 Key
         self._meta_key = 'checkpoint_callback'
@@ -65,6 +71,29 @@ class Checkpoint(Callback):
             self._load(engine, load_path)
         else:
             engine.print(f"[yellow]Warning: Resume checkpoint '{load_path}' not found. Starting from scratch.[/]", plugin='Checkpointing')
+
+    def on_batch_end(self, event: Event):
+        """
+        每个 Batch 结束时：
+        检查是否需要按 Step 保存
+        """
+        if self.every_n_train_steps and event.engine.state == "TRAIN":
+            step = event.engine.global_step
+            if step > 0 and step % self.every_n_train_steps == 0:
+                # 保存 step checkpoint
+                filename = f"{self.name}_step_{step}.pt"
+                
+                # 传递 is_step=True
+                self._save(event.engine, filename, verbose=self.verbose, is_step=True)
+                
+                # 删除旧的 step checkpoint
+                if self.last_step_checkpoint and self.last_step_checkpoint != filename:
+                    self._remove(event.engine, self.last_step_checkpoint)
+                self.last_step_checkpoint = filename
+                
+                # 同时更新 last checkpoint
+                if self.save_last:
+                    self._save(event.engine, f"{self.name}_last.pt", verbose=False, is_step=True)
 
     def on_epoch_end(self, event: Event):
         """
@@ -118,7 +147,7 @@ class Checkpoint(Callback):
         # 更新 Meta 状态
         engine.meta[self._meta_key] = {'best_k_models': self.best_k_models}
 
-    def _save(self, engine: 'Engine', filename: str, verbose: bool = True):
+    def _save(self, engine: 'Engine', filename: str, verbose: bool = True, is_step: bool = False):
         # 确保 meta 数据是最新的
         if self.monitor:
             engine.meta[self._meta_key] = {'best_k_models': self.best_k_models}
@@ -129,6 +158,8 @@ class Checkpoint(Callback):
         state = {
             'epoch': engine.epoch,
             'global_step': engine.global_step,
+            'batch_idx': engine.batch_idx,
+            'is_step': is_step,
             'model_state_dict': raw_model.state_dict(),
             'optimizer_state_dict': engine.optimizer.state_dict() if engine.optimizer else None,
             'scheduler_state_dict': engine.scheduler.state_dict() if engine.scheduler else None,
@@ -192,10 +223,23 @@ class Checkpoint(Callback):
                     engine.meta.update(checkpoint['meta'])
 
                 loaded_epoch = checkpoint.get('epoch', 0)
-                engine.start_epoch = loaded_epoch + 1
+                loaded_batch_idx = checkpoint.get('batch_idx', -1)
+                is_step = checkpoint.get('is_step', False)
+                
+                if is_step:
+                    # 如果是 Step Checkpoint，从当前 Epoch 的下一个 Batch 继续
+                    engine.start_epoch = loaded_epoch
+                    engine.start_batch_idx = loaded_batch_idx
+                    msg = f"Epoch {engine.start_epoch}, Batch {engine.start_batch_idx + 1}"
+                else:
+                    # 如果是 Epoch Checkpoint，从下一个 Epoch 开始
+                    engine.start_epoch = loaded_epoch + 1
+                    engine.start_batch_idx = -1
+                    msg = f"Epoch {engine.start_epoch}"
+
                 engine.global_step = checkpoint.get('global_step', 0)
                 
-                engine.print(f"[green]Successfully resumed training from Epoch {engine.start_epoch}, Global Step {engine.global_step}[/]", plugin='Checkpointing')
+                engine.print(f"[green]Successfully resumed training from {msg}, Global Step {engine.global_step}[/]", plugin='Checkpointing')
                 
         except Exception as e:
             engine.print(f"[red]Failed to load checkpoint: {e}[/]", plugin='Checkpointing')

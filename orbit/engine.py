@@ -114,6 +114,7 @@ class Engine:
         self.global_step = 0     # 全局 Step
         self.epoch = 0           # 当前 Epoch
         self.batch_idx = 0       # 当前 Batch 索引
+        self.start_batch_idx = -1 # 恢复训练时的起始 Batch 索引 (跳过此索引及之前的)
         self.is_first_batch = False
         self.is_last_batch = False
         
@@ -484,6 +485,11 @@ class Engine:
             task = progress.add_task(f"[Ep {self.epoch+1}/{self.num_epochs}]", total=num_batches)
             
             for batch_idx, batch_data in enumerate(loader):
+                # 断点续训：跳过已训练的 Batch
+                if self.epoch == self.start_epoch and batch_idx <= self.start_batch_idx:
+                    progress.update(task, advance=1, description=f"[dim]Skipping batch {batch_idx}...[/]")
+                    continue
+
                 self.batch_idx = batch_idx
                 self.is_first_batch = (batch_idx == 0)
                 

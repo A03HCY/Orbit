@@ -88,7 +88,7 @@ trainer = Engine(
         Mentor(),
         MemoryEstimator(verbose=False, alert_threshold='128mb', stop_threshold='150mb')
     ]
-).set_checkpoint('./checkpoints/conv_cifar10')
+).set_checkpoint('./checkpoints/conv_cifar10', every_n_train_steps=800)
 
 
 for trainer in trainer.train(train_loader, num_epochs=10):
