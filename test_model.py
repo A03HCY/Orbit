@@ -91,4 +91,9 @@ trainer = Engine(
 ).set_checkpoint('./checkpoints/conv_cifar10')
 
 
-trainer.run(train_loader, test_loader, num_epochs=20)
+for trainer in trainer.train(train_loader, num_epochs=10):
+    trainer.auto_update()
+
+    if not trainer.is_last_batch: continue
+    for trainer in trainer.eval(test_loader):
+        trainer.auto_update()

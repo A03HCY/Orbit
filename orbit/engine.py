@@ -28,10 +28,10 @@ class Engine:
         def __init__(self, engine: 'Engine'):
             self.engine = engine
         def __enter__(self):
-            self.engine._print_edge(top=False)
+            # self.engine._print_edge(top=False)
             self.engine.console.print('\n')
         def __exit__(self, exc_type, exc_val, exc_tb):
-            self.engine.console.print('\n')
+            # self.engine.console.print('\n')
             self.engine._print_edge(top=True)
 
     def __init__(
@@ -114,6 +114,8 @@ class Engine:
         self.global_step = 0     # 全局 Step
         self.epoch = 0           # 当前 Epoch
         self.batch_idx = 0       # 当前 Batch 索引
+        self.is_first_batch = False
+        self.is_last_batch = False
         
         self.state = "IDLE"      # TRAIN / EVAL
         self.stop_training = False # 插件可以通过设置此标志为 True 来停止训练
@@ -229,7 +231,7 @@ class Engine:
         '''
         if plugin:
             # 宽度 15, 右对齐, 青色加粗
-            prefix = f"[bold cyan]{plugin:>15}[/] │"
+            prefix = f"[[bold cyan]{plugin:>15}[/]] "
             self.console.print(prefix, *args, **kwargs)
         else:
             self.console.print(*args, **kwargs)
@@ -298,6 +300,75 @@ class Engine:
         else:
             self.data = batch_data.to(self.device)
             self.target = None
+
+    def update(self, loss: torch.Tensor):
+        '''执行反向传播及参数更新。
+
+        Args:
+            loss (torch.Tensor): 当前 Step 的 Loss。
+        '''
+        # 1. 梯度累积：Loss 缩放
+        if self.accumulation_steps > 1:
+            loss = loss / self.accumulation_steps
+        
+        # 2. Backward (计算梯度)
+        if self.use_amp and self.scaler:
+            self.scaler.scale(loss).backward()
+        else:
+            loss.backward()
+
+        # 3. Optimizer Step (仅在累积步数到达或 Epoch 结束时执行)
+        if (self.batch_idx + 1) % self.accumulation_steps == 0 or self.is_last_batch:
+            if self.use_amp and self.scaler:
+                if self.grad_clip_norm:
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                if self.grad_clip_norm:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                self.optimizer.step()
+            
+            self.optimizer.zero_grad()
+            self.global_step += 1
+
+    def _forward_pass(self) -> torch.Tensor:
+        '''执行前向传播并计算 Loss (内部方法)。'''
+        with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
+            if self.forward_step:
+                self.loss = self.forward_step.forward(self, self.data, self.target)
+            else:
+                if isinstance(self.data, (list, tuple)):
+                    self.output = self.model(*self.data)
+                else:
+                    self.output = self.model(self.data)
+
+                if self.output is None:
+                    raise ValueError("Model returned None! Please check your model's forward() method.")
+                
+                if self.criterion and self.target is not None:
+                    self.loss = self.criterion(self.output, self.target)
+                else:
+                    self.loss = torch.tensor(0.0, device=self.device)
+            
+            return self.loss
+
+    def auto_update(self) -> torch.Tensor:
+        '''自动执行前向传播、Loss 计算、反向传播及参数更新。
+        
+        如果在评估模式 (EVAL) 下调用，仅执行前向传播和 Loss 计算。
+
+        Returns:
+            torch.Tensor: 当前 Step 的 Loss (未缩放)。
+        '''
+        loss = self._forward_pass()
+        
+        # 仅在训练模式下执行更新
+        if self.state == "TRAIN":
+            self.update(loss)
+            
+        return loss
 
     def run(
         self,
@@ -386,23 +457,19 @@ class Engine:
             self._fire_event("on_exception")
         finally:
             self._fire_event("on_train_end")
-            self._print_edge(top=False)
 
-    def _run_one_epoch(self, loader: Any, prefix: str = "Train", color: str = "blue"):
-        '''执行单个 Epoch 的循环 (内部方法)。
-
-        负责迭代 DataLoader，执行前向传播、反向传播（仅训练）、梯度更新及进度显示。
-
-        Args:
-            loader (Any): 数据加载器。
-            prefix (str, optional): 进度条前缀显示文本。默认为 "Train"。
-            color (str, optional): 进度条前缀颜色。默认为 "blue"。
-        '''
-        is_train = (self.state == "TRAIN")
-        self.model.train() if is_train else self.model.eval()
+    def _train_epoch_iterator(self, loader: Any, total_steps: Optional[int] = None, prefix: str = "Train", color: str = "blue"):
+        '''生成器：执行单个 Epoch 的训练循环。'''
+        self.model.train()
         
-        epoch_loss_sum = 0.0
-        num_batches = len(loader)
+        # 尝试获取真实的 loader 长度
+        try:
+            real_len = len(loader)
+        except:
+            real_len = None
+            
+        # 确定进度条的总步数
+        num_batches = total_steps if total_steps is not None else real_len
         
         with Progress(
             TextColumn(f"[{color}]{prefix}"),
@@ -418,61 +485,25 @@ class Engine:
             
             for batch_idx, batch_data in enumerate(loader):
                 self.batch_idx = batch_idx
+                self.is_first_batch = (batch_idx == 0)
+                
+                # 优先使用真实长度判断 is_last_batch
+                if real_len is not None:
+                    self.is_last_batch = (batch_idx == real_len - 1)
+                elif num_batches is not None:
+                    self.is_last_batch = (batch_idx == num_batches - 1)
+                else:
+                    self.is_last_batch = False
                 
                 self._process_batch_data(batch_data)
                 self._fire_event("on_batch_start")
 
-                # --- Forward ---
-                with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
-                    if self.forward_step:
-                        self.loss = self.forward_step.forward(self, self.data, self.target)
-                    else:
-                        if isinstance(self.data, (list, tuple)):
-                            self.output = self.model(*self.data)
-                        else:
-                            self.output = self.model(self.data)
-
-                        if self.output is None:
-                            raise ValueError("Model returned None! Please check your model's forward() method.")
-                        
-                        if self.criterion and self.target is not None:
-                            self.target = self.target
-                            self.loss = self.criterion(self.output, self.target)
-                        else:
-                            self.loss = torch.tensor(0.0, device=self.device)
-                    
-                    loss_val = self.loss.item()
-                    epoch_loss_sum += loss_val
-
-                # --- Backward (仅训练模式) ---
-                if is_train:
-                    # 1. 梯度累积：Loss 缩放
-                    if self.accumulation_steps > 1:
-                        self.loss = self.loss / self.accumulation_steps
-                    
-                    # 2. Backward (计算梯度)
-                    if self.use_amp and self.scaler:
-                        self.scaler.scale(self.loss).backward()
-                    else:
-                        self.loss.backward()
-
-                    # 3. Optimizer Step (仅在累积步数到达或 Epoch 结束时执行)
-                    if (batch_idx + 1) % self.accumulation_steps == 0 or (batch_idx + 1) == num_batches:
-                        if self.use_amp and self.scaler:
-                            if self.grad_clip_norm:
-                                self.scaler.unscale_(self.optimizer)
-                                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                            self.scaler.step(self.optimizer)
-                            self.scaler.update()
-                        else:
-                            if self.grad_clip_norm:
-                                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                            self.optimizer.step()
-                        
-                        self.optimizer.zero_grad()
-                        self.global_step += 1
+                # Yield self to allow external control (e.g., engine.step())
+                yield self
 
                 # 更新进度条
+                loss_val = self.loss.item() if self.loss is not None else 0.0
+                
                 lr_str = ""
                 if self.optimizer:
                     current_lr = self.optimizer.param_groups[0]['lr']
@@ -490,10 +521,199 @@ class Engine:
                 self._fire_event("on_batch_end")
                 
                 if self.stop_training: break
+
+    def _eval_epoch_iterator(self, loader: Any, total_steps: Optional[int] = None, prefix: str = "Eval ", color: str = "yellow"):
+        '''生成器：执行单个 Epoch 的验证/测试循环。'''
+        self.model.eval()
         
-        # 计算 epoch 平均 loss
-        avg_loss = epoch_loss_sum / num_batches if num_batches > 0 else 0.0
+        try:
+            real_len = len(loader)
+        except:
+            real_len = None
+            
+        num_batches = total_steps if total_steps is not None else real_len
         
-        # 存入 metrics 供 Callback (如 Checkpoint) 使用
-        metric_key = "train_loss" if self.state == "TRAIN" else "val_loss"
-        self.metrics[metric_key] = avg_loss
+        with Progress(
+            TextColumn(f"[{color}]{prefix}"),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeRemainingColumn(),
+            console=self.console,
+            transient=True
+        ) as progress:
+            lr_str = ""
+            if self.optimizer:
+                current_lr = self.optimizer.param_groups[0]['lr']
+                if current_lr < 1e-6:
+                    lr_str = f" LR: {current_lr:.2e}"
+                else:
+                    lr_str = f" LR: {current_lr:.6f}"
+                
+                if self.is_in_warmup():
+                    lr_str += " [Warmup]"
+            task = progress.add_task(f"{lr_str} [Ep {self.epoch+1}/{self.num_epochs}]", total=num_batches)
+            
+            with torch.no_grad():
+                for batch_idx, batch_data in enumerate(loader):
+                    self.batch_idx = batch_idx
+                    self.is_first_batch = (batch_idx == 0)
+                    
+                    if real_len is not None:
+                        self.is_last_batch = (batch_idx == real_len - 1)
+                    elif num_batches is not None:
+                        self.is_last_batch = (batch_idx == num_batches - 1)
+                    else:
+                        self.is_last_batch = False
+                    
+                    self._process_batch_data(batch_data)
+                    self._fire_event("on_batch_start")
+
+                    yield self
+                    
+                    loss_val = self.loss.item() if self.loss is not None else 0.0
+                    logs = f"Loss: {loss_val:.4f}{lr_str} [Ep {self.epoch+1}/{self.num_epochs}]"
+                    progress.update(task, advance=1, description=logs)
+                    self._fire_event("on_batch_end")
+
+    def train(
+        self,
+        train_loader: Any,
+        num_epochs: int = 10,
+        start_epoch: Optional[int] = None,
+        total_steps: Optional[int] = None
+    ):
+        '''生成器：启动训练循环，允许用户自定义 Step 逻辑。
+
+        Args:
+            train_loader (Any): 训练数据加载器。
+            num_epochs (int, optional): 总训练轮数。
+            start_epoch (int, optional): 起始 Epoch。
+            total_steps (int, optional): 手动指定进度条的总步数 (用于特殊 Loader)。
+        '''
+        self.train_loader = train_loader
+        self.num_epochs = num_epochs
+        if start_epoch is not None:
+            self.start_epoch = start_epoch
+
+        self._fire_event("on_train_start")
+        try:
+            for epoch in range(self.start_epoch, self.num_epochs):
+                self.epoch = epoch
+                self.metrics = {}
+                self.state = "TRAIN"
+                
+                self._fire_event("on_epoch_start")
+                
+                # 使用生成器迭代
+                epoch_loss_sum = 0.0
+                count = 0
+                
+                for _ in self._train_epoch_iterator(self.train_loader, total_steps=total_steps):
+                    yield self
+                    if self.loss is not None:
+                        epoch_loss_sum += self.loss.item()
+                        count += 1
+                
+                if self.stop_training:
+                    break
+
+                if self.scheduler:
+                    self.scheduler.step()
+
+                self._fire_event("on_epoch_end")
+                
+                # 计算并打印 Epoch 总结
+                avg_loss = epoch_loss_sum / count if count > 0 else 0.0
+                self.metrics['train_loss'] = avg_loss
+                
+                lr_str = ""
+                if self.optimizer:
+                    current_lr = self.optimizer.param_groups[0]['lr']
+                    if current_lr < 1e-6:
+                        lr_str = f" | LR: {current_lr:.2e}"
+                    else:
+                        lr_str = f" | LR: {current_lr:.6f}"
+                    if self.is_in_warmup():
+                        lr_str += " [Warmup]"
+
+                msg = f"[dark_magenta]Epoch {self.epoch+1}/{self.num_epochs} | Train Loss: {avg_loss:.4f}{lr_str}"
+                self.print(msg, plugin='Engine')
+
+        except KeyboardInterrupt:
+            self.print("[red][bold]Training interrupted by user.", plugin='Engine')
+            self.stop(source="User", reason="KeyboardInterrupt")
+            self._fire_event("on_requested_stop", source="User", reason="KeyboardInterrupt")
+        except Exception as e:
+            self.exception = e
+            self.console.print_exception()
+            self._fire_event("on_exception")
+        finally:
+            self._fire_event("on_train_end")
+
+    def eval(
+        self,
+        val_loader: Any,
+        total_steps: Optional[int] = None,
+        description: str = "Eval "
+    ):
+        '''生成器：启动评估循环。
+
+        Args:
+            val_loader (Any): 验证数据加载器。
+            total_steps (int, optional): 手动指定进度条的总步数。
+            description (str, optional): 进度条描述。
+        '''
+        self.val_loader = val_loader
+        self.state = "EVAL"
+        self._fire_event("on_eval_start")
+        
+        try:
+            epoch_loss_sum = 0.0
+            count = 0
+            
+            for _ in self._eval_epoch_iterator(self.val_loader, total_steps=total_steps, prefix=description):
+                yield self
+                if self.loss is not None:
+                    epoch_loss_sum += self.loss.item()
+                    count += 1
+            
+            avg_loss = epoch_loss_sum / count if count > 0 else 0.0
+            self.metrics['val_loss'] = avg_loss
+            
+        except KeyboardInterrupt:
+            self.print("[red][bold]Eval interrupted by user.", plugin='Engine')
+            self.stop(source="User", reason="KeyboardInterrupt")
+            self._fire_event("on_requested_stop", source="User", reason="KeyboardInterrupt")
+        except Exception as e:
+            self.exception = e
+            self.console.print_exception()
+            self._fire_event("on_exception")
+        finally:
+            self._fire_event("on_eval_end")
+
+    def _run_one_epoch(self, loader: Any, prefix: str = "Train", color: str = "blue"):
+        '''执行单个 Epoch 的循环 (内部方法)。'''
+        is_train = (self.state == "TRAIN")
+        
+        if is_train:
+            epoch_loss_sum = 0.0
+            count = 0
+            for _ in self._train_epoch_iterator(loader, prefix=prefix, color=color):
+                self.auto_update()
+                epoch_loss_sum += self.loss.item()
+                count += 1
+            
+            avg_loss = epoch_loss_sum / count if count > 0 else 0.0
+            self.metrics['train_loss'] = avg_loss
+        
+        else:
+            epoch_loss_sum = 0.0
+            count = 0
+            for _ in self._eval_epoch_iterator(loader, prefix=prefix, color=color):
+                self._forward_pass()
+                epoch_loss_sum += self.loss.item()
+                count += 1
+            
+            avg_loss = epoch_loss_sum / count if count > 0 else 0.0
+            self.metrics['val_loss'] = avg_loss

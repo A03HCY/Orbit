@@ -71,4 +71,5 @@ class ModelSummary(Callback):
         summary_table.add_row("Est. Params Size (MB):", f"[bold blue]{total_size_mb:.2f} MB[/]")
         
         console.print(summary_table)
-        console.print(' ' + '─' * 15 + '┬' + '─' * 35)
+        #console.print(' ' + '─' * 15 + '─' + '─' * 35)
+        console.print()
