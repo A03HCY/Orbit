@@ -117,6 +117,7 @@ class Engine:
         self.start_batch_idx = -1 # 恢复训练时的起始 Batch 索引 (跳过此索引及之前的)
         self.is_first_batch = False
         self.is_last_batch = False
+        self.is_end_of_epoch = False
         
         self.state = "IDLE"      # TRAIN / EVAL
         self.stop_training = False # 插件可以通过设置此标志为 True 来停止训练
@@ -308,15 +309,18 @@ class Engine:
         Args:
             loss (torch.Tensor): 当前 Step 的 Loss。
         '''
-        # 1. 梯度累积：Loss 缩放
+        self.loss = loss
+
+        # 1. 梯度累积：Loss 缩放 (仅用于 Backward)
+        backward_loss = loss
         if self.accumulation_steps > 1:
-            loss = loss / self.accumulation_steps
+            backward_loss = loss / self.accumulation_steps
         
         # 2. Backward (计算梯度)
         if self.use_amp and self.scaler:
-            self.scaler.scale(loss).backward()
+            self.scaler.scale(backward_loss).backward()
         else:
-            loss.backward()
+            backward_loss.backward()
 
         # 3. Optimizer Step (仅在累积步数到达或 Epoch 结束时执行)
         if (self.batch_idx + 1) % self.accumulation_steps == 0 or self.is_last_batch:
