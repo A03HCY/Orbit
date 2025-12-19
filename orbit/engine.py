@@ -118,6 +118,7 @@ class Engine:
         self.is_first_batch = False
         self.is_last_batch = False
         self.is_end_of_epoch = False
+        self.is_epoch_end = False
         
         self.state = "IDLE"      # TRAIN / EVAL
         self.stop_training = False # 插件可以通过设置此标志为 True 来停止训练
@@ -309,6 +310,7 @@ class Engine:
         Args:
             loss (torch.Tensor): 当前 Step 的 Loss。
         '''
+        if self.is_epoch_end: return
         self.loss = loss
 
         # 1. 梯度累积：Loss 缩放 (仅用于 Backward)
@@ -466,6 +468,7 @@ class Engine:
     def _train_epoch_iterator(self, loader: Any, total_steps: Optional[int] = None, prefix: str = "Train", color: str = "blue"):
         '''生成器：执行单个 Epoch 的训练循环。'''
         self.model.train()
+        self.is_epoch_end = False
         
         # 尝试获取真实的 loader 长度
         try:
@@ -531,6 +534,11 @@ class Engine:
                 self._fire_event("on_batch_end")
                 
                 if self.stop_training: break
+            
+        if not self.stop_training:
+            self.is_epoch_end = True
+            yield self
+            self.is_epoch_end = False
 
     def _eval_epoch_iterator(self, loader: Any, total_steps: Optional[int] = None, prefix: str = "Eval ", color: str = "yellow"):
         '''生成器：执行单个 Epoch 的验证/测试循环。'''
@@ -621,7 +629,7 @@ class Engine:
                 
                 for _ in self._train_epoch_iterator(self.train_loader, total_steps=total_steps):
                     yield self
-                    if self.loss is not None:
+                    if self.loss is not None and not self.is_epoch_end:
                         epoch_loss_sum += self.loss.item()
                         count += 1
                 
@@ -710,6 +718,7 @@ class Engine:
             epoch_loss_sum = 0.0
             count = 0
             for _ in self._train_epoch_iterator(loader, prefix=prefix, color=color):
+                if self.is_epoch_end: continue
                 self.auto_update()
                 epoch_loss_sum += self.loss.item()
                 count += 1
@@ -727,3 +736,8 @@ class Engine:
             
             avg_loss = epoch_loss_sum / count if count > 0 else 0.0
             self.metrics['val_loss'] = avg_loss
+    
+    def load_checkpoint(self, path: str) -> 'Engine':
+        plugin: Checkpoint = [p for p in self.plugins if not isinstance(p, Checkpoint)][0]
+        plugin._load(self, path)
+        return self
