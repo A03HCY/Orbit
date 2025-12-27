@@ -106,7 +106,22 @@ class ClassificationReport(Callback):
         table.add_column("Recall", justify="right")
         table.add_column("F1-Score", justify="right")
 
-        for class_name in self.class_names:
+        # 限制显示数量，防止刷屏
+        max_display = 20
+        items_to_show = []
+        
+        if len(self.class_names) > max_display:
+            items_to_show.extend(self.class_names[:10])
+            items_to_show.append(None) # None 表示省略号
+            items_to_show.extend(self.class_names[-10:])
+        else:
+            items_to_show = self.class_names
+
+        for class_name in items_to_show:
+            if class_name is None:
+                table.add_row("...", "...", "...", "...")
+                continue
+
             if class_name in report:
                 row = report[class_name]
                 table.add_row(
@@ -136,19 +151,40 @@ class ClassificationReport(Callback):
         """使用 Seaborn 绘制混淆矩阵"""
         cm = confusion_matrix(y_true, y_pred)
         
+        num_classes = len(self.class_names)
+        
+        # 动态调整 Figure 大小
+        # 基础大小 10，每多一个类别增加一点尺寸，上限设个限制防止过大
+        fig_base = 10
+        fig_scale = 0.3
+        figsize_dim = max(fig_base, min(50, num_classes * fig_scale))
+        
         # 创建 Figure
-        fig, ax = plt.subplots(figsize=(8, 8))
+        fig, ax = plt.subplots(figsize=(figsize_dim, figsize_dim))
+        
+        # 智能决定是否显示数值 annot
+        do_annot = True
+        if num_classes > 20:
+            do_annot = False
+
         sns.heatmap(
             cm, 
-            annot=True, 
+            annot=do_annot, 
             fmt='d', 
             cmap=self.cm_cmap,
             xticklabels=self.class_names,
             yticklabels=self.class_names,
-            ax=ax
+            ax=ax,
+            square=True
         )
+        
+        # 调整标签样式
+        if num_classes > 20:
+            plt.xticks(rotation=90, fontsize=8)
+            plt.yticks(rotation=0, fontsize=8)
+            
         ax.set_xlabel('Predicted')
         ax.set_ylabel('True')
-        ax.set_title('Confusion Matrix')
+        ax.set_title(f'Confusion Matrix ({num_classes} classes)')
         plt.tight_layout()
         return fig

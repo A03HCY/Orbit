@@ -31,8 +31,8 @@ class Engine:
             # self.engine._print_edge(top=False)
             self.engine.console.print('\n')
         def __exit__(self, exc_type, exc_val, exc_tb):
-            # self.engine.console.print('\n')
-            self.engine._print_edge(top=True)
+            self.engine.console.print('\n')
+            # self.engine._print_edge(top=True)
 
     def __init__(
         self,
@@ -311,6 +311,9 @@ class Engine:
             loss (torch.Tensor): 当前 Step 的 Loss。
         '''
         if self.is_epoch_end: return
+        
+        # 保存原始 Loss 用于日志 (因为 SAM 需要第二次 forward 会覆盖 self.loss)
+        original_loss = loss
         self.loss = loss
 
         # 1. 梯度累积：Loss 缩放 (仅用于 Backward)
@@ -318,7 +321,7 @@ class Engine:
         if self.accumulation_steps > 1:
             backward_loss = loss / self.accumulation_steps
         
-        # 2. Backward (计算梯度)
+        # 2. Backward 1 (计算梯度)
         if self.use_amp and self.scaler:
             self.scaler.scale(backward_loss).backward()
         else:
@@ -326,18 +329,74 @@ class Engine:
 
         # 3. Optimizer Step (仅在累积步数到达或 Epoch 结束时执行)
         if (self.batch_idx + 1) % self.accumulation_steps == 0 or self.is_last_batch:
-            if self.use_amp and self.scaler:
-                if self.grad_clip_norm:
-                    self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                if self.grad_clip_norm:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                self.optimizer.step()
             
-            self.optimizer.zero_grad()
+            # 检测是否为 SAM 优化器 (Duck Typing)
+            is_sam = hasattr(self.optimizer, 'first_step') and hasattr(self.optimizer, 'second_step')
+
+            if is_sam:
+                # --- SAM Optimizer Logic ---
+                if self.use_amp and self.scaler:
+                    # AMP 下的 SAM 处理
+                    # 3.1. Unscale 梯度以便 first_step 计算正确的 epsilon
+                    self.scaler.unscale_(self.optimizer)
+                    
+                    # 3.2. 梯度裁剪 (可选)
+                    if self.grad_clip_norm:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                    
+                    # 3.3. SAM First Step: w -> w + e
+                    # 注意: 我们假设 unscale 后梯度有效。
+                    self.optimizer.first_step(zero_grad=True)
+                    
+                    # 3.4. Second Forward: 计算 w + e 处的 Loss
+                    # _forward_pass 会更新 self.loss, 所以我们最后需要恢复
+                    self._forward_pass()
+                    
+                    # 3.5. Second Backward: 计算 w + e 处的梯度
+                    self.scaler.scale(self.loss).backward()
+                    
+                    # 3.6. SAM Second Step: 恢复 w, 并更新 w
+                    # 需要再次 unscale 第二次计算的梯度
+                    self.scaler.unscale_(self.optimizer)
+                    if self.grad_clip_norm:
+                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                    
+                    self.optimizer.second_step(zero_grad=True)
+                    self.scaler.update()
+                    
+                else:
+                    # 普通模式下的 SAM 处理
+                    if self.grad_clip_norm:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                    
+                    self.optimizer.first_step(zero_grad=True)
+                    
+                    self._forward_pass()
+                    self.loss.backward()
+                    
+                    if self.grad_clip_norm:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                        
+                    self.optimizer.second_step(zero_grad=True)
+                
+                # 恢复原始 Loss 以保证日志记录的一致性
+                self.loss = original_loss
+
+            else:
+                # --- Standard Optimizer Logic ---
+                if self.use_amp and self.scaler:
+                    if self.grad_clip_norm:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    if self.grad_clip_norm:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                    self.optimizer.step()
+                
+                self.optimizer.zero_grad()
+            
             self.global_step += 1
 
     def _forward_pass(self) -> torch.Tensor:
