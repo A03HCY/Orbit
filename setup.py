@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='orbit-torch',
-    version='0.0.3',
+    version='0.0.4a1',
     description='A PyTorch training engine with plugin system',
     author='Aiden Hopkins',
     author_email='acdphc@qq.com',
@@ -15,7 +15,9 @@ setup(
         'matplotlib',
         'seaborn',
         'numpy',
-        'scikit-learn'
+        'scikit-learn',
+        'einops',
+        'tokenizers'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
