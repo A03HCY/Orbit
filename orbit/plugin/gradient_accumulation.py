@@ -1,8 +1,7 @@
 from typing import TYPE_CHECKING
 from orbit.callback import Callback, Event
 
-if TYPE_CHECKING:
-    from orbit.engine import Engine
+if TYPE_CHECKING: from orbit.engine import Engine
 
 class GradientAccumulation(Callback):
     """

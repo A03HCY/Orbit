@@ -8,13 +8,12 @@ from typing import Any, List, Optional, Union, Dict, Tuple
 try: from torch.utils.tensorboard import SummaryWriter
 except: pass
 
-from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn, MofNCompleteColumn
-from rich.console import Console
+from rich.progress  import Progress, TextColumn, BarColumn, TimeRemainingColumn, MofNCompleteColumn
+from rich.console   import Console
 
 from orbit.callback import Callback, Forward, Event
-from orbit.plugin.checkpoint import Checkpoint
-from orbit.plugin.board import Board
-from orbit.plugin.display_model import ModelSummary
+from orbit.plugin   import Checkpoint, Board, ModelSummary
+
 
 class Engine:
     '''训练循环控制器，负责协调模型训练、验证及回调事件。
@@ -273,9 +272,6 @@ class Engine:
         for cb in self.plugins:
             method = getattr(cb, event_name, None)
             if method:
-                # [修改] 移除 try-except pass。
-                # 我们需要看到 Callback 里的错误，否则调试是地狱。
-                # 如果一定要防御性编程，可以使用 console.print_exception()
                 method(event) 
 
     def _process_batch_data(self, batch_data: Any):

@@ -8,8 +8,7 @@ from typing import TYPE_CHECKING, Optional, Union
 
 from orbit.callback import Callback, Event
 
-if TYPE_CHECKING:
-    from orbit.engine import Engine
+if TYPE_CHECKING: from orbit.engine import Engine
 
 class MemoryEstimator(Callback):
     """

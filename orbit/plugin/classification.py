@@ -7,8 +7,8 @@ from typing import List, Optional, TYPE_CHECKING
 import rich.box as box
 
 from orbit.callback import Callback, Event
-if TYPE_CHECKING:
-    from ..engine import Engine
+
+if TYPE_CHECKING: from orbit.engine import Engine
 
 class ClassificationReport(Callback):
     def __init__(

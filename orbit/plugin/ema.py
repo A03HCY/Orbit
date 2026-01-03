@@ -3,8 +3,7 @@ import torch
 from orbit.callback import Callback, Event
 from typing import TYPE_CHECKING, Dict
 
-if TYPE_CHECKING:
-    from orbit.engine import Engine
+if TYPE_CHECKING: from orbit.engine import Engine
 
 class EMA(Callback):
     """
