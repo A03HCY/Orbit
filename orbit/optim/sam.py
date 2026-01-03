@@ -90,3 +90,10 @@ class SAM(torch.optim.Optimizer):
 
     def step(self, closure=None):
         raise NotImplementedError('SAM requires steps to be run manually: first_step and second_step')
+
+    def load_state_dict(self, state_dict):
+        self.base_optimizer.load_state_dict(state_dict)
+        self.param_groups = self.base_optimizer.param_groups
+
+    def state_dict(self):
+        return self.base_optimizer.state_dict()
