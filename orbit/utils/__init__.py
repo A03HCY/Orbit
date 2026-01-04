@@ -29,8 +29,8 @@ from .mask import (
 )
 from .layer_io import (
     get_model_by_name,
-    save_layer_weights,
-    load_layer_weights
+    save_layer, load_layer,
+    save_model, load_model
 )
 from .lora import (
     save_lora, load_lora, inject_lora,

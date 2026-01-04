@@ -11,3 +11,4 @@ from orbit.plugin.mentor import Mentor
 from orbit.plugin.ema import EMA # Not tested
 from orbit.plugin.memory_estimator import MemoryEstimator
 from orbit.plugin.overfit import Overfit
+from orbit.plugin.lora import LoRA

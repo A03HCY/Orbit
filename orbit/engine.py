@@ -13,6 +13,7 @@ from rich.console   import Console
 
 from orbit.callback import Callback, Forward, Event
 from orbit.plugin   import Checkpoint, Board, ModelSummary
+from orbit.utils    import load_model
 
 
 class Engine:
@@ -795,4 +796,17 @@ class Engine:
     def load_checkpoint(self, path: str) -> 'Engine':
         plugin: Checkpoint = [p for p in self.plugins if not isinstance(p, Checkpoint)][0]
         plugin._load(self, path)
+        return self
+
+    def load(self, path: str, strict: bool = True) -> 'Engine':
+        '''从文件加载模型权重。
+
+        Args:
+            path (str): 权重文件路径。
+            strict (bool): 是否严格匹配键值。默认为 True。
+        
+        Returns:
+            Engine: 返回 Engine 实例自身以支持链式调用。
+        '''
+        load_model(self.unwrap_model(), path, strict=strict, map_location=self.device)
         return self

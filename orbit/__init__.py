@@ -7,4 +7,4 @@ import orbit.plugin as plugin
 
 seed_info = None
 
-__version__ = '0.0.4'
+__version__ = '0.0.5a0'

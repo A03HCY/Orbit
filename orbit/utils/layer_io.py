@@ -23,7 +23,7 @@ def get_model_by_name(model: nn.Module, name: str) -> nn.Module:
         module = getattr(module, n)
     return module
 
-def save_layer_weights(model: nn.Module, layer_name: str, file_path: str) -> None:
+def save_layer(model: nn.Module, layer_name: str, file_path: str) -> None:
     '''保存模型指定层的权重到文件。
     
     Args:
@@ -34,7 +34,7 @@ def save_layer_weights(model: nn.Module, layer_name: str, file_path: str) -> Non
     module = get_model_by_name(model, layer_name)
     torch.save(module.state_dict(), file_path)
 
-def load_layer_weights(
+def load_layer(
     model: nn.Module, 
     layer_name: str, 
     file_path: str, 
@@ -51,5 +51,49 @@ def load_layer_weights(
         map_location (str or torch.device): 加载位置。默认为 'cpu'。
     '''
     state_dict = torch.load(file_path, map_location=map_location)
+
+    if isinstance(state_dict, dict) and 'model_state_dict' in state_dict:
+        state_dict = state_dict['model_state_dict']
+
     module = get_model_by_name(model, layer_name)
+
+    prefix = layer_name + '.'
+    if any(k.startswith(prefix) for k in state_dict.keys()):
+        new_state_dict = {}
+        for k, v in state_dict.items():
+            if k.startswith(prefix):
+                new_key = k[len(prefix):]
+                new_state_dict[new_key] = v
+        state_dict = new_state_dict
+
     module.load_state_dict(state_dict, strict=strict)
+
+def save_model(model: nn.Module, file_path: str) -> None:
+    '''保存整个模型的权重到文件。
+    
+    Args:
+        model (nn.Module): 目标模型。
+        file_path (str): 保存路径。
+    '''
+    torch.save(model.state_dict(), file_path)
+
+def load_model(
+    model: nn.Module, 
+    file_path: str, 
+    strict: bool = True,
+    map_location: Union[str, torch.device] = 'cpu'
+) -> None:
+    '''从文件加载权重到整个模型。
+    
+    Args:
+        model (nn.Module): 目标模型。
+        file_path (str): 权重文件路径。
+        strict (bool): 是否严格匹配键值。默认为 True。
+        map_location (str or torch.device): 加载位置。默认为 'cpu'。
+    '''
+    state_dict = torch.load(file_path, map_location=map_location)
+
+    if isinstance(state_dict, dict) and 'model_state_dict' in state_dict:
+        state_dict = state_dict['model_state_dict']
+
+    model.load_state_dict(state_dict, strict=strict)

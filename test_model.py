@@ -95,5 +95,4 @@ for trainer in trainer.train(train_loader, num_epochs=10):
     trainer.auto_update()
 
     if not trainer.is_epoch_end: continue
-    for trainer in trainer.eval(test_loader):
-        trainer.auto_update()
+    for trainer in trainer.eval(test_loader): trainer.auto_update()

@@ -162,14 +162,19 @@ def load_lora(model: nn.Module, path: str):
     '''加载 LoRA 权重到模型中。
 
     使用 strict=False 加载权重，并打印缺失或意外的键的警告信息。
-    主要用于加载通过 save_lora 保存的权重。
+    支持加载纯权重文件或 Checkpoint 插件保存的包含 'model_state_dict' 的字典。
 
     Args:
         model (nn.Module): 目标模型。
         path (str): 权重文件路径。
     '''
-    lora_state_dict = torch.load(path, map_location='cpu')
+    checkpoint = torch.load(path, map_location='cpu')
     
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        lora_state_dict = checkpoint['model_state_dict']
+    else:
+        lora_state_dict = checkpoint
+
     missing, unexpected = model.load_state_dict(lora_state_dict, strict=False)
     
     if unexpected:
