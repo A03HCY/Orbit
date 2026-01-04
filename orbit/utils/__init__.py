@@ -14,7 +14,7 @@ from .freeze import (
     set_trainable,
     freeze_layers,
     unfreeze_layers,
-    get_trainable_params
+    get_trainable_params,
 )
 from .seed import (
     seed_everything,
@@ -26,4 +26,13 @@ from .mask import (
     make_lookahead_mask,
     make_causal_mask,
     make_sliding_window_mask
+)
+from .layer_io import (
+    get_model_by_name,
+    save_layer_weights,
+    load_layer_weights
+)
+from .lora import (
+    save_lora, load_lora, inject_lora,
+    freeze_backbone_only
 )

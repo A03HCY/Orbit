@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from typing import Union
 
-def get_module_by_name(model: nn.Module, name: str) -> nn.Module:
+def get_model_by_name(model: nn.Module, name: str) -> nn.Module:
     '''通过名称获取模型的子模块。
     
     Args:
@@ -31,7 +31,7 @@ def save_layer_weights(model: nn.Module, layer_name: str, file_path: str) -> Non
         layer_name (str): 要保存权重的层名称。
         file_path (str): 保存路径。
     '''
-    module = get_module_by_name(model, layer_name)
+    module = get_model_by_name(model, layer_name)
     torch.save(module.state_dict(), file_path)
 
 def load_layer_weights(
@@ -51,5 +51,5 @@ def load_layer_weights(
         map_location (str or torch.device): 加载位置。默认为 'cpu'。
     '''
     state_dict = torch.load(file_path, map_location=map_location)
-    module = get_module_by_name(model, layer_name)
+    module = get_model_by_name(model, layer_name)
     module.load_state_dict(state_dict, strict=strict)
