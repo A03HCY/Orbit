@@ -34,5 +34,6 @@ from .layer_io import (
 )
 from .lora import (
     save_lora, load_lora, inject_lora,
-    freeze_backbone_only
+    freeze_backbone_only,
+    LoRADiagnoser
 )

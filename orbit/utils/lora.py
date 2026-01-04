@@ -45,6 +45,12 @@ def freeze_backbone_only(
                     for p in module.lora_b.parameters(): p.requires_grad = True
                 elif isinstance(module.lora_b, nn.Parameter):
                     module.lora_b.requires_grad = True
+            
+            if hasattr(module, 'dora_m') and module.dora_m is not None:
+                module.dora_m.requires_grad = True
+                
+            if hasattr(module, 'lora_gate') and module.lora_gate is not None:
+                module.lora_gate.requires_grad = True
                     
         for name, param in model.named_parameters():
             if any(k in name for k in unlock_head_keywords):
