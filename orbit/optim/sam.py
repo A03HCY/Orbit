@@ -34,7 +34,7 @@ class SAM(torch.optim.Optimizer):
 
     @torch.no_grad()
     def first_step(self, zero_grad=False):
-        '''计算并应用参数扰动 epsilon。
+        r'''计算并应用参数扰动 epsilon。
 
         该步骤根据当前梯度将模型参数 $w$ 更新为 $w + \epsilon$。
 
@@ -55,7 +55,7 @@ class SAM(torch.optim.Optimizer):
 
     @torch.no_grad()
     def second_step(self, zero_grad=False):
-        '''恢复参数并执行真正的梯度更新。
+        r'''恢复参数并执行真正的梯度更新。
 
         该步骤将参数从 $w + \epsilon$ 恢复回 $w$，并利用扰动位置的梯度更新 $w$。
 

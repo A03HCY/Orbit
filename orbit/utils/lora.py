@@ -66,6 +66,60 @@ def freeze_backbone_only(
             print(f"- Extra unlocked layers: {unlock_head_keywords}")
 
 
+def merge_lora(model: nn.Module, verbose: bool = False):
+    '''将模型中所有 LoRA 层的权重合并到原始层中。
+
+    用于推理加速。遍历模型中的所有模块，找到 LoRA 包装层并调用其 merge 方法。
+    
+    Args:
+        model (nn.Module): 包含 LoRA 层的模型。
+        verbose (bool): 是否打印合并统计信息。默认为 False。
+        
+    Returns:
+        nn.Module: 合并权重后的模型。
+    '''
+    lora_types = tuple(lora_models)
+    count = 0
+    
+    for module in model.modules():
+        if isinstance(module, lora_types):
+            # 仅当 r > 0 且尚未合并时才执行合并
+            if hasattr(module, 'r') and module.r > 0 and hasattr(module, 'merged') and not module.merged:
+                module.merge()
+                count += 1
+                
+    if verbose:
+        print(f"Merged LoRA weights in {count} modules.")
+        
+    return model
+
+def unmerge_lora(model: nn.Module, verbose: bool = False):
+    '''撤销模型中所有 LoRA 层的权重合并。
+    
+    用于在推理后恢复训练状态。注意：DoRA 模式下无法精确恢复原始权重。
+    
+    Args:
+        model (nn.Module): 包含 LoRA 层的模型。
+        verbose (bool): 是否打印操作信息。默认为 False。
+        
+    Returns:
+        nn.Module: 撤销合并后的模型。
+    '''
+    lora_types = tuple(lora_models)
+    count = 0
+    
+    for module in model.modules():
+        if isinstance(module, lora_types):
+            if hasattr(module, 'merged') and module.merged:
+                module.unmerge()
+                count += 1
+                
+    if verbose:
+        print(f"Unmerged LoRA weights in {count} modules.")
+        
+    return model
+
+
 def inject_lora(
     model: nn.Module, 
     r: int = 8, 
@@ -74,7 +128,9 @@ def inject_lora(
     gate: bool = False,
     dora: bool = False,
     target_names: list = None,
-    exclude_names: list = None
+    exclude_names: list = None,
+    verbose: bool = False,
+    prefix: str = ""
 ):
     '''向模型中注入 LoRA 层。
 
@@ -88,26 +144,41 @@ def inject_lora(
         lora_dropout (float): Dropout 概率。默认为 0.05。
         gate (bool): 是否启用 Gated LoRA (添加可学习的门控参数)。默认为 False。
         dora (bool): 是否启用 DoRA (Weight-Decomposed Low-Rank Adaptation)。默认为 False。
-        target_names (list, optional): 仅注入名称包含这些关键字的层。默认为 None (注入所有支持的层)。
-        exclude_names (list, optional): 排除名称包含这些关键字的层。默认为 None。
+        target_names (list, optional): 仅注入名称包含这些关键字的层。支持字符串（子串匹配）或正则表达式对象。默认为 None (注入所有支持的层)。
+        exclude_names (list, optional): 排除名称包含这些关键字的层。支持字符串（子串匹配）或正则表达式对象。默认为 None。
+        verbose (bool): 是否打印注入的层信息。默认为 False。
+        prefix (str): 内部递归使用的路径前缀。
 
     Returns:
         nn.Module: 注入 LoRA 后的模型。
     '''
+    import re
+    
+    def check_match(name, patterns):
+        if patterns is None: return False
+        for p in patterns:
+            if isinstance(p, str):
+                if p in name: return True
+            elif hasattr(p, 'search'):
+                if p.search(name): return True
+        return False
+
     for name, child in model.named_children():
-        is_target = target_names is None or any(t in name for t in target_names)
-        is_excluded = exclude_names is not None and any(e in name for e in exclude_names)
+        full_name = f"{prefix}.{name}" if prefix else name
         
-        if not is_target or is_excluded:
-            inject_lora(child, r, lora_alpha, lora_dropout, gate, dora, target_names, exclude_names)
+        should_inject = target_names is None or check_match(full_name, target_names)
+        is_excluded = check_match(full_name, exclude_names)
+        
+        if not should_inject or is_excluded:
+            inject_lora(child, r, lora_alpha, lora_dropout, gate, dora, target_names, exclude_names, verbose, full_name)
             continue
             
+        new_layer = None
         if isinstance(child, nn.Linear):
             new_layer = LinearLoRA(
                 child, r=r, lora_alpha=lora_alpha, lora_dropout=lora_dropout, 
                 gate=gate, dora=dora
             )
-            setattr(model, name, new_layer)
             
         elif isinstance(child, nn.Conv2d):
             if child.kernel_size == (1, 1) or child.kernel_size == 1:
@@ -117,27 +188,88 @@ def inject_lora(
                     child, r=r, lora_alpha=lora_alpha, lora_dropout=lora_dropout,
                     gate=gate, dora=dora
                 )
-                setattr(model, name, new_layer)
 
         elif isinstance(child, nn.Conv1d):
             new_layer = Conv1dLoRA(
                 child, r=r, lora_alpha=lora_alpha, lora_dropout=lora_dropout,
                 gate=gate, dora=dora
             )
-            setattr(model, name, new_layer)
 
         elif isinstance(child, nn.Embedding):
             new_layer = EmbeddingLoRA(
                 child, r=r, lora_alpha=lora_alpha,
                 gate=gate, dora=dora
             )
+            
+        if new_layer is not None:
             setattr(model, name, new_layer)
-                
+            if verbose:
+                print(f"LoRA injected: {full_name} ({child.__class__.__name__})")
         else:
-            inject_lora(child, r, lora_alpha, lora_dropout, gate, dora, target_names, exclude_names)
+            # 如果当前层匹配但不是支持的叶子层（或者是容器），继续递归
+            inject_lora(child, r, lora_alpha, lora_dropout, gate, dora, target_names, exclude_names, verbose, full_name)
             
     return model
 
+def inject_lora_file(model: nn.Module, path: str, verbose: bool = False):
+    '''从文件自动注入 LoRA 并加载权重。
+
+    该函数会分析权重文件，自动推断 LoRA 参数（如 r, gate, dora），
+    向模型注入相应的 LoRA 层，并加载权重。
+
+    Args:
+        model (nn.Module): 目标模型。
+        path (str): 权重文件路径。
+        verbose (bool): 是否打印详细信息。默认为 False。
+
+    Returns:
+        nn.Module: 注入 LoRA 并加载权重后的模型。
+    '''
+    import os
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"File not found: {path}")
+        
+    checkpoint = torch.load(path, map_location='cpu')
+    
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        state_dict = checkpoint['model_state_dict']
+        config = checkpoint.get('orbit_lora_config', {})
+    else:
+        state_dict = checkpoint
+        config = {}
+        
+    r = config.get('r', 8)
+    alpha = config.get('alpha', 16)
+    target_names = config.get('target_names', None)
+    
+    # 自动检测 gate 和 dora
+    has_gate = any('lora_gate' in k for k in state_dict.keys())
+    has_dora = any('dora_m' in k for k in state_dict.keys())
+    
+    if verbose:
+        print(f"Injecting LoRA from {path}...")
+        print(f"Config: r={r}, alpha={alpha}, gate={has_gate}, dora={has_dora}, targets={target_names}")
+        
+    inject_lora(
+        model, 
+        r=r, 
+        lora_alpha=alpha, 
+        gate=has_gate, 
+        dora=has_dora, 
+        target_names=target_names, 
+        verbose=verbose
+    )
+    
+    missing, unexpected = model.load_state_dict(state_dict, strict=False)
+    
+    if verbose:
+        lora_missing = [k for k in missing if 'lora_' in k or 'dora_' in k]
+        if lora_missing:
+            print(f"Warning: Missing LoRA keys: {lora_missing}")
+        else:
+            print("LoRA weights loaded successfully.")
+            
+    return model
 
 def save_lora(model: nn.Module, path: str):
     '''仅保存模型的 LoRA 权重。

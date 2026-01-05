@@ -119,12 +119,12 @@ class LinearLoRA(nn.Module):
                 weight = (weight / (norm + 1e-6)) * self.dora_m
                 
                 # Update original weight (Destructive!)
-                self.original_layer.weight.data = weight
+                self.original_layer.weight.data = weight.to(self.original_layer.weight.dtype)
             else:
                 # W_new = W_old + B @ A * scaling
                 delta_w = (self.lora_b @ self.lora_a) * self.scaling
                 if self.gate: delta_w *= self.lora_gate
-                self.original_layer.weight.data += delta_w
+                self.original_layer.weight.data += delta_w.to(self.original_layer.weight.dtype)
             
             self.merged = True
 
@@ -170,7 +170,7 @@ class LinearLoRA(nn.Module):
             norm = weight.norm(p=2, dim=1, keepdim=True)
             weight = (weight / (norm + 1e-6)) * self.dora_m
             
-            return F.linear(x, weight, self.original_layer.bias)
+            return F.linear(x, weight.to(x.dtype), self.original_layer.bias)
         
         result = self.original_layer(x)
         
@@ -327,7 +327,7 @@ class Conv2dLoRA(nn.Module):
                 weight = self.original_layer.weight + delta_w
                 norm = weight.norm(p=2, dim=(1, 2, 3), keepdim=True)
                 weight = (weight / (norm + 1e-6)) * self.dora_m
-                self.original_layer.weight.data = weight
+                self.original_layer.weight.data = weight.to(self.original_layer.weight.dtype)
             else:
                 self.original_layer.weight.data += delta_w
             
@@ -370,7 +370,7 @@ class Conv2dLoRA(nn.Module):
             weight = (weight / (norm + 1e-6)) * self.dora_m
             
             return F.conv2d(
-                x, weight, self.original_layer.bias, 
+                x, weight.to(x.dtype), self.original_layer.bias, 
                 self.stride, self.padding, self.dilation, self.groups
             )
             
@@ -510,7 +510,7 @@ class Conv1dLoRA(nn.Module):
                 weight = self.original_layer.weight + delta_w
                 norm = weight.norm(p=2, dim=(1, 2), keepdim=True)
                 weight = (weight / (norm + 1e-6)) * self.dora_m
-                self.original_layer.weight.data = weight
+                self.original_layer.weight.data = weight.to(self.original_layer.weight.dtype)
             else:
                 self.original_layer.weight.data += delta_w
             
@@ -544,7 +544,7 @@ class Conv1dLoRA(nn.Module):
             weight = (weight / (norm + 1e-6)) * self.dora_m
             
             return F.conv1d(
-                x, weight, self.original_layer.bias,
+                x, weight.to(x.dtype), self.original_layer.bias,
                 self.stride, self.padding, self.dilation, self.groups
             )
             
@@ -659,7 +659,7 @@ class EmbeddingLoRA(nn.Module):
                 weight = self.original_layer.weight + delta_w
                 norm = weight.norm(p=2, dim=1, keepdim=True)
                 weight = (weight / (norm + 1e-6)) * self.dora_m
-                self.original_layer.weight.data = weight
+                self.original_layer.weight.data = weight.to(self.original_layer.weight.dtype)
             else:
                 self.original_layer.weight.data += delta_w
             
@@ -694,7 +694,7 @@ class EmbeddingLoRA(nn.Module):
             weight = (weight / (norm + 1e-6)) * self.dora_m
             
             return F.embedding(
-                x, weight, self.padding_idx, 
+                x, weight.to(x.dtype if x.dtype.is_floating_point else self.original_layer.weight.dtype), self.padding_idx, 
                 self.original_layer.max_norm, self.original_layer.norm_type,
                 self.original_layer.scale_grad_by_freq, self.original_layer.sparse
             )

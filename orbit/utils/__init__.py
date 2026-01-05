@@ -33,7 +33,11 @@ from .layer_io import (
     save_model, load_model
 )
 from .lora import (
-    save_lora, load_lora, inject_lora,
+    save_lora, load_lora, inject_lora, inject_lora_file,
+    merge_lora, unmerge_lora,
     freeze_backbone_only,
     LoRADiagnoser
+)
+from .data import (
+    build_sft
 )
