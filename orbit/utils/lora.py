@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-from typing import Union, Optional, List
 
 from orbit.model import LinearLoRA, Conv2dLoRA, Conv1dLoRA, EmbeddingLoRA
 
@@ -120,6 +119,42 @@ def unmerge_lora(model: nn.Module, verbose: bool = False):
     return model
 
 
+def unload_lora(model: nn.Module, merge: bool = False, verbose: bool = False):
+    '''卸载模型中的 LoRA 层，恢复原始层。
+    
+    Args:
+        model (nn.Module): 包含 LoRA 层的模型。
+        merge (bool): 是否在卸载前合并权重。默认为 False。
+        verbose (bool): 是否打印操作信息。默认为 False。
+        
+    Returns:
+        nn.Module: 卸载 LoRA 后的模型。
+    '''
+    lora_types = tuple(lora_models)
+    count = 0
+    
+    def _unload(parent):
+        nonlocal count
+        for name, child in parent.named_children():
+            if isinstance(child, lora_types):
+                if merge:
+                    child.merge()
+                
+                if hasattr(child, 'original_layer'):
+                    setattr(parent, name, child.original_layer)
+                    count += 1
+            else:
+                _unload(child)
+
+    _unload(model)
+    
+    if verbose:
+        action = "Merged and unloaded" if merge else "Unloaded"
+        print(f"{action} LoRA layers in {count} modules.")
+        
+    return model
+
+
 def inject_lora(
     model: nn.Module, 
     r: int = 8, 
@@ -211,7 +246,12 @@ def inject_lora(
             
     return model
 
-def inject_lora_file(model: nn.Module, path: str, verbose: bool = False):
+def inject_lora_file(
+    model: nn.Module, 
+    path: str, 
+    merge_and_unload: bool = False, 
+    verbose: bool = False
+):
     '''从文件自动注入 LoRA 并加载权重。
 
     该函数会分析权重文件，自动推断 LoRA 参数（如 r, gate, dora），
@@ -220,6 +260,7 @@ def inject_lora_file(model: nn.Module, path: str, verbose: bool = False):
     Args:
         model (nn.Module): 目标模型。
         path (str): 权重文件路径。
+        merge_and_unload (bool): 是否在加载后合并权重并卸载 LoRA 层。默认为 False。
         verbose (bool): 是否打印详细信息。默认为 False。
 
     Returns:
@@ -268,6 +309,9 @@ def inject_lora_file(model: nn.Module, path: str, verbose: bool = False):
             print(f"Warning: Missing LoRA keys: {lora_missing}")
         else:
             print("LoRA weights loaded successfully.")
+            
+    if merge_and_unload:
+        unload_lora(model, merge=True, verbose=verbose)
             
     return model
 

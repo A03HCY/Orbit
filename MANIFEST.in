@@ -1,1 +1,2 @@
-recursive-include orbit/plugin/data *.json
+recursive-include orbit/plugin/data  *.json
+recursive-include orbit/dataset/data *.jsonl
