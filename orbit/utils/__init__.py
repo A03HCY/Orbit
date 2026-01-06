@@ -38,6 +38,6 @@ from .lora import (
     freeze_backbone_only,
     LoRADiagnoser
 )
-from .data import (
-    build_sft
+from .sft import (
+    build_sft, train_sft
 )

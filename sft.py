@@ -4,7 +4,7 @@ from orbit.dataset import CognField, CognitionSFT
 field_zh = CognField(
     model_name='Coplis',
     model_developer='GITM Team',
-    model_version='1.0 mini',
+    model_version='1.0 nano',
     knowledge_cutoff='2024.1',
     capabilities='逻辑推理、文本生成、代码编写和语言翻译',
     multimodal_support='文本',
@@ -15,7 +15,7 @@ field_zh = CognField(
 field_en = CognField(
     model_name='Coplis',
     model_developer='GITM Team',
-    model_version='1.0 mini',
+    model_version='1.0 nano',
     knowledge_cutoff='January 2024',
     capabilities='logical reasoning, text generation, code writing, and language translation',
     multimodal_support='text',

@@ -77,6 +77,10 @@ class LinearLoRA(nn.Module):
         else:
             self.dora_m = None
 
+        # 确保 LoRA 参数与原始层在同一设备上
+        if hasattr(self.original_layer, 'weight'):
+            self.to(self.original_layer.weight.device)
+
         if merge_weights: self.merge()
 
     def reset_parameters(self):
@@ -286,6 +290,10 @@ class Conv2dLoRA(nn.Module):
         else:
             self.dora_m = None
 
+        # 确保 LoRA 参数与原始层在同一设备上
+        if hasattr(self.original_layer, 'weight'):
+            self.to(self.original_layer.weight.device)
+
         if merge_weights: self.merge()
 
     def reset_parameters(self):
@@ -487,6 +495,10 @@ class Conv1dLoRA(nn.Module):
         else:
             self.dora_m = None
 
+        # 确保 LoRA 参数与原始层在同一设备上
+        if hasattr(self.original_layer, 'weight'):
+            self.to(self.original_layer.weight.device)
+
         if merge_weights:
             self.merge()
 
@@ -636,6 +648,10 @@ class EmbeddingLoRA(nn.Module):
             )
         else:
             self.dora_m = None
+
+        # 确保 LoRA 参数与原始层在同一设备上
+        if hasattr(self.original_layer, 'weight'):
+            self.to(self.original_layer.weight.device)
 
         if merge_weights:
             self.merge()

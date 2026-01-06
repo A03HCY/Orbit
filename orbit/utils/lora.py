@@ -270,7 +270,8 @@ def inject_lora_file(
     if not os.path.exists(path):
         raise FileNotFoundError(f"File not found: {path}")
         
-    checkpoint = torch.load(path, map_location='cpu')
+    device = next(model.parameters()).device
+    checkpoint = torch.load(path, map_location=device)
     
     if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
         state_dict = checkpoint['model_state_dict']
@@ -344,7 +345,8 @@ def load_lora(model: nn.Module, path: str):
         model (nn.Module): 目标模型。
         path (str): 权重文件路径。
     '''
-    checkpoint = torch.load(path, map_location='cpu')
+    device = next(model.parameters()).device
+    checkpoint = torch.load(path, map_location=device)
     
     if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
         lora_state_dict = checkpoint['model_state_dict']

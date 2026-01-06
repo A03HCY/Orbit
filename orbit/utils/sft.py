@@ -1,4 +1,6 @@
-from typing import Dict, Any
+from typing import Dict, Any, TYPE_CHECKING
+
+if TYPE_CHECKING: from orbit.engine import Engine
 
 def build_sft(
     user_content: str, 
@@ -80,3 +82,16 @@ def build_sft(
         'attention_mask': attention_mask,
         'labels': labels
     }
+
+def train_sft(engine: 'Engine'):
+    input_ids = engine.data['input_ids']
+    attention_mask = engine.data['attention_mask']
+    labels = engine.data['labels']
+
+    output = engine.unwrap_model()(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        labels=labels
+    )
+
+    engine.update(output.loss)

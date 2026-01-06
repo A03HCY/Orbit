@@ -31,7 +31,8 @@ setup(
         'numpy',
         'scikit-learn',
         'einops',
-        'tokenizers'
+        'tokenizers',
+        'tensorboard'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',

@@ -3,7 +3,7 @@ import json
 from typing import Any, Dict
 from dataclasses import dataclass, asdict
 from torch.utils.data import Dataset
-from orbit.utils.data import build_sft
+from orbit.utils import build_sft
 
 @dataclass
 class CognField:
@@ -90,7 +90,8 @@ class CognitionSFT(Dataset):
         tokenizer: Any, 
         zh_field: CognField, 
         en_field: CognField, 
-        max_length: int = 2048
+        max_length: int = 2048,
+        padding: bool = True
     ):
         '''初始化自我认知 SFT 数据集。
 
@@ -99,9 +100,11 @@ class CognitionSFT(Dataset):
             zh_field (CognField): 中文模型信息配置。
             en_field (CognField): 英文模型信息配置。
             max_length (int, optional): 序列最大长度。默认为 2048。
+            padding (bool, optional): 是否进行 padding 到 max_length。默认为 True。
         '''
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.padding = padding
         self.raw_dataset = build_self_cogn(zh_field, en_field)
 
     def __len__(self) -> int:
@@ -122,5 +125,6 @@ class CognitionSFT(Dataset):
             user_content=item['instruction'],
             model_content=item['response'],
             tokenizer=self.tokenizer,
-            max_length=self.max_length
+            max_length=self.max_length,
+            padding=self.padding
         )
