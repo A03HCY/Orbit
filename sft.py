@@ -23,12 +23,21 @@ field_en = CognField(
     identity_restriction='an artificial intelligence language model'
 )
 
-def get_self_cognition_dataset(tokenizer: Any, max_length: int = 2048) -> CognitionSFT:
+def get_self_cognition_dataset(
+    tokenizer: Any, 
+    max_length: int = 2048,
+    model_role: str = 'model',
+    padding: bool = True,
+    ignore_index: int = -100
+) -> CognitionSFT:
     '''便捷函数，用于获取预配置的自我认知数据集。
 
     Args:
         tokenizer (Any): 分词器实例。
         max_length (int, optional): 序列最大长度。默认为 2048。
+        model_role (str, optional): 模型角色名称。默认为 'model'。
+        padding (bool, optional): 是否进行 padding。默认为 True。
+        ignore_index (int, optional): 用于 mask labels 的索引值。默认为 -100。
 
     Returns:
         CognitionSFT: 实例化后的数据集对象。
@@ -37,5 +46,8 @@ def get_self_cognition_dataset(tokenizer: Any, max_length: int = 2048) -> Cognit
         tokenizer=tokenizer,
         zh_field=field_zh,
         en_field=field_en,
-        max_length=max_length
+        max_length=max_length,
+        model_role=model_role,
+        padding=padding,
+        ignore_index=ignore_index
     )

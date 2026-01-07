@@ -32,7 +32,7 @@ setup(
         'scikit-learn',
         'einops',
         'tokenizers',
-        'tensorboard'
+        'transformers'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',

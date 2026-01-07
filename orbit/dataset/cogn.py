@@ -91,7 +91,9 @@ class CognitionSFT(Dataset):
         zh_field: CognField, 
         en_field: CognField, 
         max_length: int = 2048,
-        padding: bool = True
+        model_role: str = 'model',
+        padding: bool = True,
+        ignore_index: int = -100
     ):
         '''初始化自我认知 SFT 数据集。
 
@@ -100,11 +102,15 @@ class CognitionSFT(Dataset):
             zh_field (CognField): 中文模型信息配置。
             en_field (CognField): 英文模型信息配置。
             max_length (int, optional): 序列最大长度。默认为 2048。
+            model_role (str, optional): 模型角色名称。默认为 'model'。
             padding (bool, optional): 是否进行 padding 到 max_length。默认为 True。
+            ignore_index (int, optional): 用于 mask labels 的索引值。默认为 -100。
         '''
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.model_role = model_role
         self.padding = padding
+        self.ignore_index = ignore_index
         self.raw_dataset = build_self_cogn(zh_field, en_field)
 
     def __len__(self) -> int:
@@ -126,5 +132,7 @@ class CognitionSFT(Dataset):
             model_content=item['response'],
             tokenizer=self.tokenizer,
             max_length=self.max_length,
-            padding=self.padding
+            model_role=self.model_role,
+            padding=self.padding,
+            ignore_index=self.ignore_index
         )

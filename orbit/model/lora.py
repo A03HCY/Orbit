@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 import math
 
@@ -31,7 +32,8 @@ class LinearLoRA(nn.Module):
         lora_dropout: float = 0.05,
         merge_weights: bool = False,
         gate: bool = False,
-        dora: bool = False
+        dora: bool = False,
+        gradient_checkpointing: bool = False
     ):
         '''初始化 LinearLoRA。
 
@@ -43,8 +45,10 @@ class LinearLoRA(nn.Module):
             merge_weights (bool): 初始化时是否将 LoRA 权重合并到原始权重中。默认为 False。
             gate (bool): 是否使用 Gated LoRA。默认为 False。
             dora (bool): 是否使用 DoRA。默认为 False。
+            gradient_checkpointing (bool): 是否使用梯度检查点。默认为 False。
         '''
         super(LinearLoRA, self).__init__()
+        self.gradient_checkpointing = gradient_checkpointing
         
         self.in_features = original_layer.in_features
         self.out_features = original_layer.out_features
@@ -152,15 +156,7 @@ class LinearLoRA(nn.Module):
             
             self.merged = False
 
-    def forward(self, x: torch.Tensor):
-        '''前向传播。
-        
-        Args:
-            x (torch.Tensor): 输入张量。
-            
-        Returns:
-            torch.Tensor: 输出张量。
-        '''
+    def _forward_impl(self, x: torch.Tensor):
         if self.r > 0 and self.merged:
             return self.original_layer(x)
         
@@ -188,6 +184,23 @@ class LinearLoRA(nn.Module):
             result += lora_out
             
         return result
+
+    def forward(self, x: torch.Tensor):
+        '''前向传播。
+        
+        Args:
+            x (torch.Tensor): 输入张量。
+            
+        Returns:
+            torch.Tensor: 输出张量。
+        '''
+        if self.gradient_checkpointing and self.training:
+            if x.requires_grad:
+                return checkpoint(self._forward_impl, x, use_reentrant=False)
+            else:
+                dummy = torch.tensor(0.0, requires_grad=True, device=x.device)
+                return checkpoint(lambda d, x: self._forward_impl(x), dummy, x, use_reentrant=False)
+        return self._forward_impl(x)
 
     def __repr__(self):
         prefix = 'Gated' if self.gate else ''
@@ -222,7 +235,8 @@ class Conv2dLoRA(nn.Module):
         lora_dropout: float = 0.05,
         merge_weights: bool = False,
         gate: bool = False,
-        dora: bool = False
+        dora: bool = False,
+        gradient_checkpointing: bool = False
     ):
         '''初始化 Conv2dLoRA。
 
@@ -234,8 +248,10 @@ class Conv2dLoRA(nn.Module):
             merge_weights (bool): 初始化时是否将 LoRA 权重合并到原始权重中。默认为 False。
             gate (bool): 是否使用 Gated LoRA。默认为 False。
             dora (bool): 是否使用 DoRA。默认为 False。
+            gradient_checkpointing (bool): 是否使用梯度检查点。默认为 False。
         '''
         super().__init__()
+        self.gradient_checkpointing = gradient_checkpointing
         self.original_layer = original_layer
         self.in_channels = original_layer.in_channels
         self.out_channels = original_layer.out_channels
@@ -355,15 +371,7 @@ class Conv2dLoRA(nn.Module):
             
             self.merged = False
 
-    def forward(self, x: torch.Tensor):
-        '''前向传播。
-        
-        Args:
-            x (torch.Tensor): 输入张量。
-            
-        Returns:
-            torch.Tensor: 输出张量。
-        '''
+    def _forward_impl(self, x: torch.Tensor):
         if self.r > 0 and self.merged:
             return self.original_layer(x)
             
@@ -392,6 +400,23 @@ class Conv2dLoRA(nn.Module):
             result += lora_out
             
         return result
+
+    def forward(self, x: torch.Tensor):
+        '''前向传播。
+        
+        Args:
+            x (torch.Tensor): 输入张量。
+            
+        Returns:
+            torch.Tensor: 输出张量。
+        '''
+        if self.gradient_checkpointing and self.training:
+            if x.requires_grad:
+                return checkpoint(self._forward_impl, x, use_reentrant=False)
+            else:
+                dummy = torch.tensor(0.0, requires_grad=True, device=x.device)
+                return checkpoint(lambda d, x: self._forward_impl(x), dummy, x, use_reentrant=False)
+        return self._forward_impl(x)
 
     def __repr__(self):
         prefix = 'Gated' if self.gate else ''
@@ -426,7 +451,8 @@ class Conv1dLoRA(nn.Module):
         lora_dropout: float = 0.05,
         merge_weights: bool = False,
         gate: bool = False,
-        dora: bool = False
+        dora: bool = False,
+        gradient_checkpointing: bool = False
     ):
         '''初始化 Conv1dLoRA。
 
@@ -438,8 +464,10 @@ class Conv1dLoRA(nn.Module):
             merge_weights (bool): 初始化时是否将 LoRA 权重合并到原始权重中。默认为 False。
             gate (bool): 是否使用 Gated LoRA。默认为 False。
             dora (bool): 是否使用 DoRA。默认为 False。
+            gradient_checkpointing (bool): 是否使用梯度检查点。默认为 False。
         '''
         super().__init__()
+        self.gradient_checkpointing = gradient_checkpointing
         self.original_layer = original_layer
         self.in_channels = original_layer.in_channels
         self.out_channels = original_layer.out_channels
@@ -541,7 +569,7 @@ class Conv1dLoRA(nn.Module):
             
             self.merged = False
 
-    def forward(self, x: torch.Tensor):
+    def _forward_impl(self, x: torch.Tensor):
         if self.r > 0 and self.merged:
             return self.original_layer(x)
             
@@ -567,6 +595,15 @@ class Conv1dLoRA(nn.Module):
             if self.gate: lora_out *= self.lora_gate
             result += lora_out
         return result
+
+    def forward(self, x: torch.Tensor):
+        if self.gradient_checkpointing and self.training:
+            if x.requires_grad:
+                return checkpoint(self._forward_impl, x, use_reentrant=False)
+            else:
+                dummy = torch.tensor(0.0, requires_grad=True, device=x.device)
+                return checkpoint(lambda d, x: self._forward_impl(x), dummy, x, use_reentrant=False)
+        return self._forward_impl(x)
 
     def __repr__(self):
         prefix = 'Gated' if self.gate else ''
@@ -599,7 +636,8 @@ class EmbeddingLoRA(nn.Module):
         lora_alpha: int = 16, 
         merge_weights: bool = False,
         gate: bool = False,
-        dora: bool = False
+        dora: bool = False,
+        gradient_checkpointing: bool = False
     ):
         '''初始化 EmbeddingLoRA。
 
@@ -610,8 +648,10 @@ class EmbeddingLoRA(nn.Module):
             merge_weights (bool): 初始化时是否将 LoRA 权重合并到原始权重中。默认为 False。
             gate (bool): 是否使用 Gated LoRA。默认为 False。
             dora (bool): 是否使用 DoRA。默认为 False。
+            gradient_checkpointing (bool): 是否使用梯度检查点。默认为 False。
         '''
         super().__init__()
+        self.gradient_checkpointing = gradient_checkpointing
         self.original_layer = original_layer
         self.num_embeddings = original_layer.num_embeddings
         self.embedding_dim = original_layer.embedding_dim
@@ -694,7 +734,7 @@ class EmbeddingLoRA(nn.Module):
             
             self.merged = False
 
-    def forward(self, x: torch.Tensor):
+    def _forward_impl(self, x: torch.Tensor):
         if self.r > 0 and self.merged:
             return self.original_layer(x)
             
@@ -726,6 +766,13 @@ class EmbeddingLoRA(nn.Module):
             result += lora_out
             
         return result
+
+    def forward(self, x: torch.Tensor):
+        if self.gradient_checkpointing and self.training:
+            # Embedding inputs (indices) don't have gradients, so we always use the dummy tensor trick
+            dummy = torch.tensor(0.0, requires_grad=True, device=x.device)
+            return checkpoint(lambda d, x: self._forward_impl(x), dummy, x, use_reentrant=False)
+        return self._forward_impl(x)
 
     def __repr__(self):
         prefix = 'Gated' if self.gate else ''

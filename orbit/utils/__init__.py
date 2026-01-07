@@ -41,3 +41,6 @@ from .lora import (
 from .sft import (
     build_sft, train_sft
 )
+from .cuda import (
+    cuda_alloc
+)

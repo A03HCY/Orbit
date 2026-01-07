@@ -1,5 +1,6 @@
 import os
 import torch
+import inspect
 
 from typing import Optional, List, TYPE_CHECKING
 from orbit.callback import Event
@@ -125,18 +126,26 @@ class LoRA(Checkpoint):
                     opt_cls = old_opt.__class__
                     defaults = old_opt.defaults
                     
+                    # 过滤掉不在构造函数中的参数，防止某些库（如 transformers）在 defaults 中添加了额外元数据导致重建失败
+                    sig = inspect.signature(opt_cls.__init__)
+                    has_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                    if has_kwargs:
+                        filtered_defaults = defaults
+                    else:
+                        filtered_defaults = {k: v for k, v in defaults.items() if k in sig.parameters}
+
                     engine.print(f"[cyan]Re-initializing Optimizer {opt_cls.__name__} for {len(trainable_params)} trainable groups...[/]", plugin='LoRA')
                     
                     # 创建新优化器
                     if opt_cls.__name__ == 'SAM':
                         base_opt_cls = old_opt.base_optimizer.__class__
-                        new_opt = opt_cls(trainable_params, base_optimizer=base_opt_cls, **defaults)
+                        new_opt = opt_cls(trainable_params, base_optimizer=base_opt_cls, **filtered_defaults)
                     elif opt_cls.__name__ == 'Muon':
                         muon_params = [p for p in trainable_params if p.ndim == 2]
                         adamw_params = [p for p in trainable_params if p.ndim != 2]
-                        new_opt = opt_cls(muon_params=muon_params, adamw_params=adamw_params, **defaults)
+                        new_opt = opt_cls(muon_params=muon_params, adamw_params=adamw_params, **filtered_defaults)
                     else:
-                        new_opt = opt_cls(trainable_params, **defaults)
+                        new_opt = opt_cls(trainable_params, **filtered_defaults)
                     
                     # 替换 Engine 中的优化器
                     engine.optimizer = new_opt

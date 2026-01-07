@@ -525,6 +525,7 @@ class Engine:
         '''生成器：执行单个 Epoch 的训练循环。'''
         self.model.train()
         self.is_epoch_end = False
+        torch.cuda.empty_cache()
         
         # 尝试获取真实的 loader 长度
         try:
