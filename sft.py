@@ -1,7 +1,7 @@
 from typing import Any
-from orbit.dataset import CognField, CognitionSFT
+from orbit.dataset import CognitionField, CognitionSFT
 
-field_zh = CognField(
+field_zh = CognitionField(
     model_name='Coplis',
     model_developer='GITM Team',
     model_version='1.0 nano',
@@ -12,7 +12,7 @@ field_zh = CognField(
     identity_restriction='人工智能语言模型'
 )
 
-field_en = CognField(
+field_en = CognitionField(
     model_name='Coplis',
     model_developer='GITM Team',
     model_version='1.0 nano',

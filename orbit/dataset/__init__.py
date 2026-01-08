@@ -1,1 +1,1 @@
-from .cogn import CognField, CognitionSFT
+from .cogn import CognitionField, CognitionSFT

@@ -2,7 +2,7 @@ import json
 import os
 from typing import Any, Dict
 
-class BaseConfig:
+class ModelConfig:
     '''基础配置类，用于管理模型超参数。
     
     支持从 JSON 文件加载和保存，以及字典风格的属性访问。
@@ -12,14 +12,14 @@ class BaseConfig:
             setattr(self, k, v)
 
     @classmethod
-    def from_pretrained(cls, path: str) -> 'BaseConfig':
+    def from_pretrained(cls, path: str) -> 'ModelConfig':
         '''从 JSON 文件加载配置。
         
         Args:
             path (str): JSON 文件路径。
             
         Returns:
-            BaseConfig: 加载的配置对象。
+            ModelConfig: 加载的配置对象。
         '''
         if not os.path.exists(path):
             raise FileNotFoundError(f"Config file not found: {path}")
@@ -35,7 +35,6 @@ class BaseConfig:
         Args:
             path (str): 保存路径。
         '''
-        # 确保目录存在
         directory = os.path.dirname(path)
         if directory and not os.path.exists(directory):
             os.makedirs(directory)

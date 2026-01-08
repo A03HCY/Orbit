@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from orbit.model import LinearLoRA, Conv2dLoRA, Conv1dLoRA, EmbeddingLoRA
+from orbit.model.block import LinearLoRA, Conv2dLoRA, Conv1dLoRA, EmbeddingLoRA
 
 lora_models = [LinearLoRA, Conv2dLoRA, Conv1dLoRA, EmbeddingLoRA]
 

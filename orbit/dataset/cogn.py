@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 from orbit.utils import build_sft
 
 @dataclass
-class CognField:
+class CognitionField:
     '''
     自我认知字段定义
     '''
@@ -19,7 +19,7 @@ class CognField:
     limitations: str = '无法实时连接互联网获取最新资讯, 没有物理躯体或情感体验'
     identity_restriction: str = '人工智能语言模型'
 
-class CognDataset(Dataset):
+class CognitionDataset(Dataset):
     '''
     自我认知数据集类
     '''
@@ -38,16 +38,16 @@ class CognDataset(Dataset):
     def __getitem__(self, index):
         return self.data[index]
 
-def build_self_cogn(zh: CognField, en: CognField) -> CognDataset:
+def build_self_cogn(zh: CognitionField, en: CognitionField) -> CognitionDataset:
     '''
     构建自我认知数据集
 
     Args:
-        zh (CognField): 中文模型信息对象
-        en (CognField): 英文模型信息对象
+        zh (CognitionField): 中文模型信息对象
+        en (CognitionField): 英文模型信息对象
 
     Returns:
-        CognDataset: Torch 数据集对象
+        CognitionDataset: Torch 数据集对象
     '''
     data = []
     base_dir = os.path.join(os.path.dirname(__file__), 'data')
@@ -80,7 +80,7 @@ def build_self_cogn(zh: CognField, en: CognField) -> CognDataset:
                 item['response'] = response
                 data.append(item)
 
-    return CognDataset(data)
+    return CognitionDataset(data)
 
 class CognitionSFT(Dataset):
     '''自我认知 SFT 数据集包装类，将原始文本转换为训练张量。'''
@@ -88,8 +88,8 @@ class CognitionSFT(Dataset):
     def __init__(
         self, 
         tokenizer: Any, 
-        zh_field: CognField, 
-        en_field: CognField, 
+        zh_field: CognitionField, 
+        en_field: CognitionField, 
         max_length: int = 2048,
         model_role: str = 'model',
         padding: bool = True,
@@ -99,8 +99,8 @@ class CognitionSFT(Dataset):
 
         Args:
             tokenizer (Any): 分词器实例。
-            zh_field (CognField): 中文模型信息配置。
-            en_field (CognField): 英文模型信息配置。
+            zh_field (CognitionField): 中文模型信息配置。
+            en_field (CognitionField): 英文模型信息配置。
             max_length (int, optional): 序列最大长度。默认为 2048。
             model_role (str, optional): 模型角色名称。默认为 'model'。
             padding (bool, optional): 是否进行 padding 到 max_length。默认为 True。

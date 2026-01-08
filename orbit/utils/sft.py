@@ -84,14 +84,10 @@ def build_sft(
     }
 
 def train_sft(engine: 'Engine'):
-    input_ids = engine.data['input_ids']
-    attention_mask = engine.data['attention_mask']
-    labels = engine.data['labels']
-
     output = engine.unwrap_model()(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        labels=labels
+        input_ids=engine.data['input_ids'],
+        attention_mask=engine.data['attention_mask'],
+        labels=engine.data['labels']
     )
 
     engine.update(output.loss)

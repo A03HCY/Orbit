@@ -1,11 +1,13 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint
-
 import math
 
-class LinearLoRA(nn.Module):
+from orbit.model.base import BaseBlock
+from orbit.model.registry import register_model
+
+@register_model()
+class LinearLoRA(BaseBlock):
     '''实现 Linear 层的 LoRA (Low-Rank Adaptation)。
 
     LoRA 通过注入可训练的低秩矩阵来适应预训练权重，同时冻结原始权重。
@@ -47,7 +49,7 @@ class LinearLoRA(nn.Module):
             dora (bool): 是否使用 DoRA。默认为 False。
             gradient_checkpointing (bool): 是否使用梯度检查点。默认为 False。
         '''
-        super(LinearLoRA, self).__init__()
+        super().__init__()
         self.gradient_checkpointing = gradient_checkpointing
         
         self.in_features = original_layer.in_features
@@ -196,10 +198,10 @@ class LinearLoRA(nn.Module):
         '''
         if self.gradient_checkpointing and self.training:
             if x.requires_grad:
-                return checkpoint(self._forward_impl, x, use_reentrant=False)
+                return self.checkpoint(self._forward_impl, x)
             else:
                 dummy = torch.tensor(0.0, requires_grad=True, device=x.device)
-                return checkpoint(lambda d, x: self._forward_impl(x), dummy, x, use_reentrant=False)
+                return self.checkpoint(lambda d, x: self._forward_impl(x), dummy, x)
         return self._forward_impl(x)
 
     def __repr__(self):
@@ -207,7 +209,8 @@ class LinearLoRA(nn.Module):
         suffix = 'DoRA' if self.dora else 'LoRA'
         return f'{self.__class__.__name__}(type={prefix}{suffix}, in_features={self.in_features}, out_features={self.out_features}, r={self.r}, merged={self.merged})'
 
-class Conv2dLoRA(nn.Module):
+@register_model()
+class Conv2dLoRA(BaseBlock):
     '''实现 Conv2d 层的 LoRA (Low-Rank Adaptation)。
 
     使用两个连续的卷积层模拟低秩矩阵分解：
@@ -412,10 +415,10 @@ class Conv2dLoRA(nn.Module):
         '''
         if self.gradient_checkpointing and self.training:
             if x.requires_grad:
-                return checkpoint(self._forward_impl, x, use_reentrant=False)
+                return self.checkpoint(self._forward_impl, x)
             else:
                 dummy = torch.tensor(0.0, requires_grad=True, device=x.device)
-                return checkpoint(lambda d, x: self._forward_impl(x), dummy, x, use_reentrant=False)
+                return self.checkpoint(lambda d, x: self._forward_impl(x), dummy, x)
         return self._forward_impl(x)
 
     def __repr__(self):
@@ -423,7 +426,8 @@ class Conv2dLoRA(nn.Module):
         suffix = 'DoRA' if self.dora else 'LoRA'
         return f'{self.__class__.__name__}(type={prefix}{suffix}, in_channels={self.in_channels}, out_channels={self.out_channels}, kernel_size={self.kernel_size}, stride={self.stride}, padding={self.padding}, dilation={self.dilation}, groups={self.groups}, r={self.r}, merged={self.merged})'
 
-class Conv1dLoRA(nn.Module):
+@register_model()
+class Conv1dLoRA(BaseBlock):
     '''实现 Conv1d 层的 LoRA (Low-Rank Adaptation)。
 
     使用两个连续的卷积层模拟低秩矩阵分解：
@@ -599,10 +603,10 @@ class Conv1dLoRA(nn.Module):
     def forward(self, x: torch.Tensor):
         if self.gradient_checkpointing and self.training:
             if x.requires_grad:
-                return checkpoint(self._forward_impl, x, use_reentrant=False)
+                return self.checkpoint(self._forward_impl, x)
             else:
                 dummy = torch.tensor(0.0, requires_grad=True, device=x.device)
-                return checkpoint(lambda d, x: self._forward_impl(x), dummy, x, use_reentrant=False)
+                return self.checkpoint(lambda d, x: self._forward_impl(x), dummy, x)
         return self._forward_impl(x)
 
     def __repr__(self):
@@ -610,7 +614,8 @@ class Conv1dLoRA(nn.Module):
         suffix = 'DoRA' if self.dora else 'LoRA'
         return f'{self.__class__.__name__}(type={prefix}{suffix}, in={self.in_channels}, out={self.out_channels}, kernel={self.kernel_size}, r={self.r}, merged={self.merged})'
 
-class EmbeddingLoRA(nn.Module):
+@register_model()
+class EmbeddingLoRA(BaseBlock):
     '''实现 Embedding 层的 LoRA (Low-Rank Adaptation)。
 
     通过注入低秩矩阵来适应 Embedding 权重。
@@ -771,7 +776,7 @@ class EmbeddingLoRA(nn.Module):
         if self.gradient_checkpointing and self.training:
             # Embedding inputs (indices) don't have gradients, so we always use the dummy tensor trick
             dummy = torch.tensor(0.0, requires_grad=True, device=x.device)
-            return checkpoint(lambda d, x: self._forward_impl(x), dummy, x, use_reentrant=False)
+            return self.checkpoint(lambda d, x: self._forward_impl(x), dummy, x)
         return self._forward_impl(x)
 
     def __repr__(self):
