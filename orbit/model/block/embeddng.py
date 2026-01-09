@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 import math
 
-from orbit.model.base import BaseBlock
+from orbit.model import BaseBlock, register_model
 
+
+@register_model()
 class RotaryPositionalEmbedding(BaseBlock):
     """
     旋转位置编码 (Rotary Positional Embedding, RoPE)。
@@ -77,6 +79,7 @@ class RotaryPositionalEmbedding(BaseBlock):
         return (x * cos) + (self._rotate_half(x) * sin)
 
 
+@register_model()
 class SinusoidalPositionalEmbedding(BaseBlock):
 
     def __init__(self, model_dim: int, max_len: int = 128000):

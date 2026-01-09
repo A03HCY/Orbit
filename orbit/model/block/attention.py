@@ -5,8 +5,10 @@ import math
 
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from orbit.model import BaseBlock
-from orbit.model.block import RotaryPositionalEmbedding
+from orbit.model import BaseBlock, register_model
+from orbit.model.block.embeddng import RotaryPositionalEmbedding
+from orbit.model.block.gate     import SigmoidGate
+
 
 def apply_attention(
     query_states: torch.Tensor, 
@@ -64,6 +66,7 @@ def apply_attention(
     return {'output': output, 'attention_weights': attention_weights}
 
 
+@register_model()
 class MultiHeadAttention(BaseBlock):
     ''' 多头注意力机制模块。
 
@@ -105,7 +108,7 @@ class MultiHeadAttention(BaseBlock):
             self.k_norm = nn.RMSNorm(self.head_dim)
         
         if use_gate:
-            self.g_proj = nn.Linear(hidden_size, hidden_size)
+            self.g_proj = SigmoidGate(hidden_size, hidden_size)
 
         self.q_proj = nn.Linear(hidden_size, hidden_size)
 
@@ -194,7 +197,7 @@ class MultiHeadAttention(BaseBlock):
         output = self.o_proj(output)
 
         if self.use_gate:
-            output = output * torch.sigmoid(G)
+            output = output * G
 
         return {
             'output': output,

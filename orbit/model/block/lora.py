@@ -3,8 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-from orbit.model.base import BaseBlock
-from orbit.model.registry import register_model
+from orbit.model import BaseBlock, register_model
 
 @register_model()
 class LinearLoRA(BaseBlock):
