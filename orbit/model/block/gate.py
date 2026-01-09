@@ -18,7 +18,8 @@ class BaseGate(BaseBlock):
         out_features: int, 
         bias: bool = True,
         use_mlp: bool = False,
-        hidden_features: int = None
+        hidden_features: int = None,
+        override_repr: bool = True
     ):
         ''' 初始化 BaseGate。
 
@@ -35,6 +36,7 @@ class BaseGate(BaseBlock):
         self.bias = bias
         self.use_mlp = use_mlp
         self.hidden_features = hidden_features
+        self.override_repr = override_repr
 
         if use_mlp:
             hidden_features = hidden_features or in_features
@@ -66,7 +68,9 @@ class BaseGate(BaseBlock):
         return args
 
     def __repr__(self):
-        return f"{self.__class__.__name__}({', '.join(self._get_repr_args())})"
+        if self.override_repr:
+            return f"{self.__class__.__name__}({', '.join(self._get_repr_args())})"
+        return super().__repr__()
 
 
 @register_model()
@@ -125,7 +129,8 @@ class SoftmaxGate(BaseGate):
         temperature: float = 1.0,
         bias: bool = True,
         use_mlp: bool = False,
-        hidden_features: int = None
+        hidden_features: int = None,
+        override_repr: bool = True
     ):
         ''' 初始化 SoftmaxGate。
 
@@ -143,7 +148,8 @@ class SoftmaxGate(BaseGate):
             out_features=out_features,
             bias=bias,
             use_mlp=use_mlp,
-            hidden_features=hidden_features
+            hidden_features=hidden_features,
+            override_repr=override_repr
         )
         self.dim = dim
         self.temperature = temperature
@@ -181,7 +187,8 @@ class GLUGate(BaseBlock):
         hidden_features: int,
         out_features: int,
         activation: str = 'sigmoid',
-        bias: bool = True
+        bias: bool = True,
+        override_repr: bool = True
     ):
         ''' 初始化 GLUGate。
 
@@ -198,6 +205,7 @@ class GLUGate(BaseBlock):
         self.out_features = out_features
         self.activation_name = activation
         self.bias = bias
+        self.override_repr = override_repr
 
         self.proj = nn.Linear(in_features, hidden_features * 2, bias=bias)
         self.out_proj = nn.Linear(hidden_features, out_features, bias=bias)
@@ -216,14 +224,16 @@ class GLUGate(BaseBlock):
             raise ValueError(f"Unsupported activation: {activation}")
 
     def __repr__(self):
-        args = [
-            f"in_features={self.in_features}",
-            f"hidden_features={self.hidden_features}",
-            f"out_features={self.out_features}",
-            f"activation='{self.activation_name}'",
-            f"bias={self.bias}"
-        ]
-        return f"{self.__class__.__name__}({', '.join(args)})"
+        if self.override_repr:
+            args = [
+                f"in_features={self.in_features}",
+                f"hidden_features={self.hidden_features}",
+                f"out_features={self.out_features}",
+                f"activation='{self.activation_name}'",
+                f"bias={self.bias}"
+            ]
+            return f"{self.__class__.__name__}({', '.join(args)})"
+        return super().__repr__()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         ''' 前向传播。
@@ -256,7 +266,8 @@ class TopKGate(BaseGate):
         bias: bool = True,
         use_mlp: bool = False,
         hidden_features: int = None,
-        post_softmax: bool = False
+        post_softmax: bool = False,
+        override_repr: bool = True
     ):
         ''' 初始化 TopKGate。
 
@@ -274,7 +285,8 @@ class TopKGate(BaseGate):
             out_features=out_features,
             bias=bias,
             use_mlp=use_mlp,
-            hidden_features=hidden_features
+            hidden_features=hidden_features,
+            override_repr=override_repr
         )
         self.k = k
         self.post_softmax = post_softmax
@@ -323,7 +335,8 @@ class ContextGate(BaseBlock):
         self, 
         in_features: int, 
         hidden_features: int = None,
-        bias: bool = True
+        bias: bool = True,
+        override_repr: bool = True
     ):
         ''' 初始化 ContextGate。
 
@@ -336,6 +349,7 @@ class ContextGate(BaseBlock):
         self.in_features = in_features
         self.hidden_features = hidden_features or (in_features // 2)
         self.bias = bias
+        self.override_repr = override_repr
 
         self.mlp = nn.Sequential(
             nn.Linear(in_features, self.hidden_features, bias=bias),
@@ -345,12 +359,14 @@ class ContextGate(BaseBlock):
         )
 
     def __repr__(self):
-        args = [
-            f"in_features={self.in_features}",
-            f"hidden_features={self.hidden_features}",
-            f"bias={self.bias}"
-        ]
-        return f"{self.__class__.__name__}({', '.join(args)})"
+        if self.override_repr:
+            args = [
+                f"in_features={self.in_features}",
+                f"hidden_features={self.hidden_features}",
+                f"bias={self.bias}"
+            ]
+            return f"{self.__class__.__name__}({', '.join(args)})"
+        return super().__repr__()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         ''' 前向传播。
