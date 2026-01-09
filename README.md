@@ -78,7 +78,7 @@ Manual control over LoRA injection and management (alternative to the Plugin app
 ## Installation
 
 ```bash
-pip install .
+pip install orbit-torch
 ```
 
 **Requirements**:
