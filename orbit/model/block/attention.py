@@ -2,12 +2,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+from dataclasses import dataclass
+from typing import Optional, Tuple
 
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from orbit.model import BaseBlock, register_model
 from orbit.model.block.embeddng import RotaryPositionalEmbedding
 from orbit.model.block.gate     import SigmoidGate
+
+
+@dataclass
+class AttentionOutput:
+    output: torch.Tensor
+    attention_weights: Optional[torch.Tensor] = None
+    past_key_value: Optional[Tuple[torch.Tensor, torch.Tensor]] = None
 
 
 def apply_attention(
@@ -17,7 +26,7 @@ def apply_attention(
     attention_mask: torch.Tensor = None, 
     output_attentions: bool = False,
     is_causal: bool = None
-) -> dict[str, torch.Tensor]:
+) -> AttentionOutput:
     ''' 计算缩放点积注意力。
 
     Args:
@@ -29,7 +38,7 @@ def apply_attention(
         is_causal (bool, optional): 是否应用因果掩码。默认为 None。
 
     Returns:
-        dict[str, torch.Tensor]: 包含注意力输出和可选权重的字典。
+        AttentionOutput: 包含注意力输出和可选权重的对象。
     '''
     
     if not output_attentions:
@@ -49,7 +58,7 @@ def apply_attention(
                     is_causal=is_causal,
                     dropout_p=0.0
                 )
-            return {'output': output, 'attention_weights': None}
+            return AttentionOutput(output=output, attention_weights=None)
         except Exception:
             print('Error at attn cal')
             pass
@@ -63,7 +72,7 @@ def apply_attention(
     attention_weights = torch.softmax(scores, dim=-1)
     output = torch.matmul(attention_weights, value_states)
     
-    return {'output': output, 'attention_weights': attention_weights}
+    return AttentionOutput(output=output, attention_weights=attention_weights)
 
 
 @register_model()
@@ -100,6 +109,7 @@ class MultiHeadAttention(BaseBlock):
         self.num_kv_heads = num_kv_heads
         self.num_kv_queries = num_heads // num_kv_heads
         self.head_dim  = hidden_size // num_heads
+        self.kv_dim = self.num_kv_heads * self.head_dim
         self.use_qk_norm = use_qk_norm
         self.use_gate = use_gate
 
@@ -111,11 +121,8 @@ class MultiHeadAttention(BaseBlock):
             self.g_proj = SigmoidGate(hidden_size, hidden_size)
 
         self.q_proj = nn.Linear(hidden_size, hidden_size)
-
-        kv_dim = self.num_kv_heads * self.head_dim
-        self.k_proj = nn.Linear(hidden_size, kv_dim)
-        self.v_proj = nn.Linear(hidden_size, kv_dim)
-
+        self.k_proj = nn.Linear(hidden_size, self.kv_dim)
+        self.v_proj = nn.Linear(hidden_size, self.kv_dim)
         self.o_proj = nn.Linear(hidden_size, hidden_size)
 
     def forward(
@@ -128,7 +135,7 @@ class MultiHeadAttention(BaseBlock):
         rotary_pos: int = 0,
         past_key_value: tuple[torch.Tensor, torch.Tensor] = None,
         use_cache: bool = False
-    ) -> dict[str, torch.Tensor]:
+    ) -> AttentionOutput:
         ''' 执行多头注意力的前向传播。
 
         Args:
@@ -142,7 +149,7 @@ class MultiHeadAttention(BaseBlock):
             use_cache (bool, optional): 是否使用 KV 缓存。默认为 False。
 
         Returns:
-            dict[str, torch.Tensor]: 包含输出、注意力权重和 KV 缓存的字典。
+            AttentionOutput: 包含输出、注意力权重和 KV 缓存的对象。
         '''
         
         if kv_states is None:
@@ -189,8 +196,8 @@ class MultiHeadAttention(BaseBlock):
             V = V.reshape(batch_size, self.num_heads, kv_seq_len_total, self.head_dim)
 
         attn_output = apply_attention(Q, K, V, attention_mask, output_attentions)
-        output = attn_output['output']
-        attention_weights = attn_output['attention_weights']
+        output = attn_output.output
+        attention_weights = attn_output.attention_weights
 
         output = output.transpose(1, 2).contiguous().view(batch_size, q_len, self.hidden_size)
 
@@ -199,8 +206,8 @@ class MultiHeadAttention(BaseBlock):
         if self.use_gate:
             output = output * G
 
-        return {
-            'output': output,
-            'attention_weights': attention_weights,
-            'past_key_value': current_key_value
-        }
+        return AttentionOutput(
+            output=output,
+            attention_weights=attention_weights,
+            past_key_value=current_key_value
+        )

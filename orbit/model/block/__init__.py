@@ -6,7 +6,7 @@ from orbit.model.block.embeddng import (
     SinusoidalPositionalEmbedding
 )
 from orbit.model.block.attention import (
-    MultiHeadAttention, apply_attention
+    MultiHeadAttention, apply_attention, AttentionOutput
 )
 from orbit.model.block.mlp  import MLP
 from orbit.model.block.moe  import MoE
