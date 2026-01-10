@@ -1,5 +1,5 @@
-from orbit.model.base import BaseBlock
-from orbit.model.registry import (
+from .base import BaseBlock
+from .registry import (
     register_model, build_model, list_models, get_model_class
 )
-from orbit.model.config import ModelConfig
+from .config import ModelConfig

@@ -1,17 +1,21 @@
-from orbit.model.block.lora import (
+from .lora import (
     LinearLoRA, Conv2dLoRA, Conv1dLoRA, EmbeddingLoRA
 )
-from orbit.model.block.embeddng import (
+from .embeddng import (
     RotaryPositionalEmbedding,
     SinusoidalPositionalEmbedding
 )
-from orbit.model.block.attention import (
+from .attention import (
     MultiHeadAttention, apply_attention, AttentionOutput
 )
-from orbit.model.block.mlp  import MLP
-from orbit.model.block.moe  import MoE
-from orbit.model.block.film import FiLM
-from orbit.model.block.gate import (
+from .mlp  import MLP
+from .moe  import MoE
+from .film import FiLM
+from .gate import (
     SigmoidGate, TanhGate, SoftmaxGate, GLUGate,
     TopKGate, ContextGate
 )
+from .conv import (
+    CausalConv1d, calculate_causal_layer, ConvBlock, ResBasicBlock
+)
+from .tcn  import TCN
