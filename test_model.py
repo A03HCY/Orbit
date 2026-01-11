@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 from orbit.engine import Engine
 
-batch_size = 32
+batch_size = 16
 
 norm = transforms.Compose([
     transforms.ToTensor(),
@@ -64,8 +64,7 @@ class ConvNet(nn.Module):
         return x
 
 from orbit.plugin import EarlyStopping, GradientAccumulation, Warmup, Mentor, MemoryEstimator
-from orbit.utils import auto_initialize
-
+from orbit.utils  import auto_initialize
 
 model = ConvNet()
 

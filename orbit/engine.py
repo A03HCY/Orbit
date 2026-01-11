@@ -10,6 +10,7 @@ except: pass
 
 from rich.progress  import Progress, TextColumn, BarColumn, TimeRemainingColumn, MofNCompleteColumn
 from rich.console   import Console
+from accelerate     import Accelerator
 
 from orbit.callback import Callback, Forward, Event
 from orbit.plugin   import Checkpoint, Board, ModelSummary
@@ -19,9 +20,9 @@ from orbit.utils    import load_model
 class Engine:
     '''训练循环控制器，负责协调模型训练、验证及回调事件。
 
-    Engine 封装了 PyTorch 的训练循环，提供了插件机制（Callback），
-    支持自动混合精度训练（AMP）、梯度裁剪、梯度累积、Checkpoint 保存、
-    TensorBoard 可视化等功能。
+    Engine 封装了 PyTorch 的训练循环，并深度集成了 Accelerate 库。
+    它提供了开箱即用的分布式训练支持（DDP, FSDP, DeepSpeed 等）、
+    自动混合精度（AMP）、梯度裁剪、梯度累积、Checkpoint 管理以及 TensorBoard 可视化等功能。
     '''
 
     class _OutLogs:
@@ -39,61 +40,64 @@ class Engine:
         model: nn.Module,
         optimizer: torch.optim.Optimizer = None,
         criterion: nn.Module = None,
-        device: Optional[str] = None,
-        device_ids: Optional[List[int]] = None,
-        use_amp: bool = False,
+        accelerator: Optional[Accelerator] = None,
+        mixed_precision: str = 'no', # 'no', 'fp16', 'bf16'
         grad_clip_norm: float = None,
         scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
         plugins: List[Callback] = None,
         forward_step: Optional[Forward] = None,
         checkpoint_dir: str = None,
         console: Console = None,
+        **accelerator_kwargs
     ):
         '''初始化 Engine 实例。
 
         Args:
             model (nn.Module): 要训练的 PyTorch 模型。
-            optimizer (torch.optim.Optimizer, optional): 优化器。如果为 None，则需要在其他地方（如插件）手动处理或稍后赋值。
+            optimizer (torch.optim.Optimizer, optional): 优化器。如果为 None，则需要在其他地方手动处理。
             criterion (nn.Module, optional): 损失函数。如果为 None，则假设模型输出包含 loss 或自定义 loss 计算。
-            device (Optional[str], optional): 运行设备 ('cpu', 'cuda', 'cuda:0' 等)。如果为 None，则自动检测。
-            device_ids (Optional[List[int]], optional): GPU 设备 ID 列表。如果提供且长度 > 1，将启用 DataParallel。
-            use_amp (bool, optional): 是否启用自动混合精度 (Automatic Mixed Precision) 训练。默认为 False。
+            accelerator (Optional[Accelerator], optional): 预初始化的 Accelerator 实例。
+                如果为 None，将使用 mixed_precision 和 accelerator_kwargs 创建一个新的实例。
+            mixed_precision (str, optional): 混合精度模式。可选值为 'no', 'fp16', 'bf16'。默认为 'no'。
             grad_clip_norm (float, optional): 梯度裁剪的范数阈值。如果为 None，则不进行梯度裁剪。
             scheduler (Optional[torch.optim.lr_scheduler._LRScheduler], optional): 学习率调度器。
             plugins (List[Callback], optional): 初始化时要挂载的回调插件列表。
             forward_step (Optional[Forward], optional): 自定义前向传播和 Loss 计算逻辑的实现。
             checkpoint_dir (str, optional): 快速设置 Checkpoint 保存目录的快捷参数。
             console (Console, optional): 用于输出日志的 Rich Console 实例。如果为 None，则创建一个新的。
+            **accelerator_kwargs: 传递给 Accelerator 构造函数的其他参数（如 cpu, split_batches 等）。
         '''
+        # --- Accelerator 初始化 ---
+        if accelerator:
+            self.accelerator = accelerator
+        else:
+            self.accelerator = Accelerator(mixed_precision=mixed_precision, **accelerator_kwargs)
+        
         # --- 基础组件 ---
-        self.device_ids = device_ids
-
-        if self.device_ids and len(self.device_ids) > 0:
-            self.device = torch.device(f"cuda:{self.device_ids[0]}")
-        elif device is None:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        else:
-            self.device = torch.device(device)
-
-        # 移动模型到主设备
-        model = model.to(self.device)
-
-        # 多显卡处理 (DataParallel)
-        if self.device_ids and len(self.device_ids) > 1:
-            self.model = nn.DataParallel(model, device_ids=self.device_ids)
-        else:
-            self.model = model
-
-        self.model_name = self.unwrap_model().__class__.__name__
+        self.model = model
         self.optimizer = optimizer
         self.criterion = criterion
+        self.scheduler = scheduler
+        
+        # 准备模型、优化器和调度器
+        # 注意：DataLoader 将在 run/train/eval 中准备
+        if self.optimizer:
+            if self.scheduler:
+                self.model, self.optimizer, self.scheduler = self.accelerator.prepare(
+                    self.model, self.optimizer, self.scheduler
+                )
+            else:
+                self.model, self.optimizer = self.accelerator.prepare(
+                    self.model, self.optimizer
+                )
+        else:
+            self.model = self.accelerator.prepare(self.model)
+
+        self.model_name = self.unwrap_model().__class__.__name__
         
         # --- 训练配置 ---
-        self.use_amp = use_amp
         self.grad_clip_norm = grad_clip_norm
-        self.scheduler = scheduler
         self.forward_step = forward_step
-        self.scaler = torch.amp.GradScaler('cuda', enabled=use_amp) 
 
         # --- 交互与回调 ---
         self.console = console if console else Console()
@@ -145,6 +149,21 @@ class Engine:
         # 触发初始化回调
         self._fire_event("on_init")
 
+    @property
+    def device(self):
+        '''获取当前使用的设备。'''
+        return self.accelerator.device
+
+    @property
+    def use_amp(self) -> bool:
+        '''是否启用了混合精度训练。'''
+        return self.accelerator.mixed_precision != 'no'
+
+    @property
+    def scaler(self):
+        '''获取 GradScaler 对象（如果存在）。'''
+        return self.accelerator.scaler
+
     def stop(self, source: str = "User", reason: str = "Unknown"):
         '''请求停止训练。
 
@@ -157,10 +176,15 @@ class Engine:
         self.stop_reason = reason
     
     def unwrap_model(self) -> nn.Module:
-        '''获取原始模型对象 (去除 DataParallel/DistributedDataParallel 包装)。'''
-        if isinstance(self.model, (nn.DataParallel, nn.parallel.DistributedDataParallel)):
-            return self.model.module
-        return self.model
+        '''获取原始模型对象。
+        
+        使用 accelerator.unwrap_model 去除 DDP/FSDP/DeepSpeed 等分布式包装，
+        返回原始的 nn.Module 实例。
+
+        Returns:
+            nn.Module: 原始模型对象。
+        '''
+        return self.accelerator.unwrap_model(self.model)
 
     def is_in_warmup(self) -> bool:
         '''检查当前是否处于 Warmup 阶段。
@@ -179,20 +203,25 @@ class Engine:
     def init_board(self, log_dir: str = 'runs') -> 'Engine':
         '''初始化 TensorBoard 可视化插件 (Board)。
 
+        注意：此操作仅在主进程 (Main Process) 中执行，以避免多进程写入冲突。
+
         Args:
             log_dir (str, optional): TensorBoard 日志保存目录。默认为 'runs'。
 
         Returns:
             Engine: 返回 Engine 实例自身以支持链式调用。
         '''
-        board = Board(name=self.model_name, log_dir=log_dir)
-        self.attach(board, init=True)
+        # 仅在主进程初始化 Board
+        if self.accelerator.is_main_process:
+            board = Board(name=self.model_name, log_dir=log_dir)
+            self.attach(board, init=True)
         return self
 
     def set_checkpoint(self, dir: str, name: Optional[str] = None, **kwargs) -> 'Engine':
         '''配置 Checkpoint 插件。
 
         如果已存在 Checkpoint 插件，将被新配置替换。
+        注意：此操作仅在主进程 (Main Process) 中执行。
 
         Args:
             dir (str): 模型保存目录。
@@ -202,29 +231,29 @@ class Engine:
         Returns:
             Engine: 返回 Engine 实例自身以支持链式调用。
         '''
+        # 仅在主进程配置 Checkpoint
+        if not self.accelerator.is_main_process:
+            return self
+
         if name is None:
             name = self.model_name
             
-        # 1. 移除旧的 Checkpoint 插件 (如果存在)
         self.plugins = [p for p in self.plugins if not isinstance(p, Checkpoint)]
         
-        # 2. 创建新插件
         ckpt = Checkpoint(name=name, path=dir, **kwargs)
-        
-        # 3. 调用 ckpt.on_init(event)
-        # 注意：这里我们手动构造 Event，因为此时可能不在 run 循环中
         ckpt.on_init(Event(engine=self, name="on_init"))
-        
-        # 4. 挂载
         self.attach(ckpt)
         return self
     
     def _print_edge(self, top=True):
+        if not self.accelerator.is_main_process: return
         char = '┬' if top else '┴'
         self.console.print(' ' + '─' * 15 + char + '─' * 35)
     
     def print(self, *args, plugin: Optional[str] = None, **kwargs):
         '''统一日志打印方法，支持插件前缀。
+
+        注意：此方法仅在主进程 (Main Process) 中输出日志，其他进程的调用将被忽略。
 
         Args:
             *args: 要打印的内容。
@@ -232,6 +261,8 @@ class Engine:
                 用于区分不同来源的日志。
             **kwargs: 传递给 console.print 的其他参数。
         '''
+        if not self.accelerator.is_main_process: return
+        
         if plugin:
             # 宽度 15, 右对齐, 青色加粗
             prefix = f"[[bold cyan]{plugin:>15}[/]] "
@@ -280,12 +311,30 @@ class Engine:
 
         支持 Tensor, List[Tensor], Dict[str, Tensor] 等常见格式。
         自动解析并设置 self.data 和 self.target。
+        
+        注意：如果 DataLoader 已经被 accelerator.prepare 处理，数据通常已经在正确设备上。
+        此方法包含额外的检查以确保数据位于 self.device 上。
 
         Args:
             batch_data (Any): DataLoader 产生的一个 Batch 数据。
         '''
+        def to_device(data):
+            if isinstance(data, torch.Tensor):
+                return data.to(self.device)
+            elif isinstance(data, (list, tuple)):
+                return [to_device(x) for x in data]
+            elif isinstance(data, dict):
+                return {k: to_device(v) for k, v in data.items()}
+            return data
+
+        # 如果数据不在当前设备上，移动它
+        # 注意：accelerator.prepare 后的 DataLoader 通常已经处理了设备放置
+        
         if isinstance(batch_data, (list, tuple)):
-            batch_data = [x.to(self.device) if isinstance(x, torch.Tensor) else x for x in batch_data]
+            # 简单检查第一个元素
+            if len(batch_data) > 0 and isinstance(batch_data[0], torch.Tensor) and batch_data[0].device != self.device:
+                batch_data = to_device(batch_data)
+                
             if len(batch_data) == 2:
                 self.data, self.target = batch_data
             elif len(batch_data) == 1:
@@ -295,36 +344,40 @@ class Engine:
                 self.data = batch_data[:-1]
                 self.target = batch_data[-1]
         elif isinstance(batch_data, dict):
-            self.data = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in batch_data.items()}
+            # 简单检查第一个值
+            first_val = next(iter(batch_data.values()), None)
+            if isinstance(first_val, torch.Tensor) and first_val.device != self.device:
+                batch_data = to_device(batch_data)
+                
+            self.data = batch_data
             self.target = None 
         else:
-            self.data = batch_data.to(self.device)
+            if isinstance(batch_data, torch.Tensor) and batch_data.device != self.device:
+                batch_data = batch_data.to(self.device)
+            self.data = batch_data
             self.target = None
 
     def update(self, loss: torch.Tensor):
         '''执行反向传播及参数更新。
+
+        使用 accelerator.backward 处理反向传播，支持自动混合精度和梯度累积。
+        同时支持 SAM (Sharpness-Aware Minimization) 优化器的两步更新逻辑。
 
         Args:
             loss (torch.Tensor): 当前 Step 的 Loss。
         '''
         if self.is_epoch_end: return
         
-        # 保存原始 Loss 用于日志 (因为 SAM 需要第二次 forward 会覆盖 self.loss)
         original_loss = loss
         self.loss = loss
 
-        # 1. 梯度累积：Loss 缩放 (仅用于 Backward)
+        # 梯度累积处理
         backward_loss = loss
         if self.accumulation_steps > 1:
             backward_loss = loss / self.accumulation_steps
         
-        # 2. Backward 1 (计算梯度)
-        if self.use_amp and self.scaler:
-            self.scaler.scale(backward_loss).backward()
-        else:
-            backward_loss.backward()
+        self.accelerator.backward(backward_loss)
 
-        # 3. Optimizer Step (仅在累积步数到达或 Epoch 结束时执行)
         if (self.batch_idx + 1) % self.accumulation_steps == 0 or self.is_last_batch:
             
             # 检测是否为 SAM 优化器 (Duck Typing)
@@ -332,73 +385,43 @@ class Engine:
 
             if is_sam:
                 # --- SAM Optimizer Logic ---
-                if self.use_amp and self.scaler:
-                    # AMP 下的 SAM 处理
-                    # 3.1. Unscale 梯度以便 first_step 计算正确的 epsilon
-                    self.scaler.unscale_(self.optimizer)
-                    
-                    # 3.2. 梯度裁剪 (可选)
-                    if self.grad_clip_norm:
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                    
-                    # 3.3. SAM First Step: w -> w + e
-                    # 注意: 我们假设 unscale 后梯度有效。
-                    self.optimizer.first_step(zero_grad=True)
-                    
-                    # 3.4. Second Forward: 计算 w + e 处的 Loss
-                    # _forward_pass 会更新 self.loss, 所以我们最后需要恢复
-                    self._forward_pass()
-                    
-                    # 3.5. Second Backward: 计算 w + e 处的梯度
-                    self.scaler.scale(self.loss).backward()
-                    
-                    # 3.6. SAM Second Step: 恢复 w, 并更新 w
-                    # 需要再次 unscale 第二次计算的梯度
-                    self.scaler.unscale_(self.optimizer)
-                    if self.grad_clip_norm:
-                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                    
-                    self.optimizer.second_step(zero_grad=True)
-                    self.scaler.update()
-                    
-                else:
-                    # 普通模式下的 SAM 处理
-                    if self.grad_clip_norm:
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                    
-                    self.optimizer.first_step(zero_grad=True)
-                    
-                    self._forward_pass()
-                    self.loss.backward()
-                    
-                    if self.grad_clip_norm:
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                        
-                    self.optimizer.second_step(zero_grad=True)
+                # SAM 需要两次 backward，accelerate 支持多次 backward
                 
-                # 恢复原始 Loss 以保证日志记录的一致性
+                if self.grad_clip_norm:
+                    self.accelerator.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                
+                # First Step: Compute e_w
+                self.optimizer.first_step(zero_grad=True)
+
+                # Second Forward-Backward
+                self._forward_pass()
+                self.accelerator.backward(self.loss)
+                
+                if self.grad_clip_norm:
+                    self.accelerator.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
+                
+                # Second Step: Update weights
+                self.optimizer.second_step(zero_grad=True)
+                
                 self.loss = original_loss
 
             else:
                 # --- Standard Optimizer Logic ---
-                if self.use_amp and self.scaler:
-                    if self.grad_clip_norm:
-                        self.scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                else:
-                    if self.grad_clip_norm:
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
-                    self.optimizer.step()
+                if self.grad_clip_norm:
+                    self.accelerator.clip_grad_norm_(self.model.parameters(), self.grad_clip_norm)
                 
+                self.optimizer.step()
                 self.optimizer.zero_grad()
             
             self.global_step += 1
 
     def _forward_pass(self) -> torch.Tensor:
-        '''执行前向传播并计算 Loss (内部方法)。'''
-        with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
+        '''执行前向传播并计算 Loss (内部方法)。
+        
+        使用 accelerator.autocast() 上下文管理器自动处理混合精度。
+        '''
+        # 使用 accelerator.autocast() 处理混合精度
+        with self.accelerator.autocast():
             if self.forward_step:
                 self.loss = self.forward_step.forward(self, self.data, self.target)
             else:
@@ -443,6 +466,8 @@ class Engine:
     ):
         '''启动训练循环。
 
+        此方法会自动使用 accelerator.prepare 包装数据加载器以支持分布式训练。
+
         Args:
             train_loader (Any): 训练数据加载器 (通常是 torch.utils.data.DataLoader)。
             val_loader (Optional[Any], optional): 验证数据加载器。
@@ -451,6 +476,12 @@ class Engine:
                 如果为 None，则从 0 开始。用于断点续训。
             with_eval (bool, optional): 是否在每个 Epoch 结束后执行验证。默认为 True。
         '''
+        # 准备 DataLoaders
+        if val_loader:
+            train_loader, val_loader = self.accelerator.prepare(train_loader, val_loader)
+        else:
+            train_loader = self.accelerator.prepare(train_loader)
+            
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.num_epochs = num_epochs
@@ -522,19 +553,23 @@ class Engine:
             self._fire_event("on_train_end")
 
     def _train_epoch_iterator(self, loader: Any, total_steps: Optional[int] = None, prefix: str = "Train", color: str = "blue"):
-        '''生成器：执行单个 Epoch 的训练循环。'''
+        '''生成器：执行单个 Epoch 的训练循环。
+        
+        注意：进度条仅在主进程中显示。
+        '''
         self.model.train()
         self.is_epoch_end = False
         torch.cuda.empty_cache()
         
-        # 尝试获取真实的 loader 长度
         try:
             real_len = len(loader)
         except:
             real_len = None
             
-        # 确定进度条的总步数
         num_batches = total_steps if total_steps is not None else real_len
+        
+        # 仅主进程显示进度条
+        disable_progress = not self.accelerator.is_main_process
         
         with Progress(
             TextColumn(f"[{color}]{prefix}"),
@@ -543,21 +578,21 @@ class Engine:
             MofNCompleteColumn(),
             TimeRemainingColumn(),
             console=self.console,
-            transient=True
+            transient=True,
+            disable=disable_progress
         ) as progress:
             
             task = progress.add_task(f"[Ep {self.epoch+1}/{self.num_epochs}]", total=num_batches)
             
             for batch_idx, batch_data in enumerate(loader):
-                # 断点续训：跳过已训练的 Batch
                 if self.epoch == self.start_epoch and batch_idx <= self.start_batch_idx:
-                    progress.update(task, advance=1, description=f"[dim]Skipping batch {batch_idx}...[/]")
+                    if not disable_progress:
+                        progress.update(task, advance=1, description=f"[dim]Skipping batch {batch_idx}...[/]")
                     continue
 
                 self.batch_idx = batch_idx
                 self.is_first_batch = (batch_idx == 0)
                 
-                # 优先使用真实长度判断 is_last_batch
                 if real_len is not None:
                     self.is_last_batch = (batch_idx == real_len - 1)
                 elif num_batches is not None:
@@ -568,25 +603,24 @@ class Engine:
                 self._process_batch_data(batch_data)
                 self._fire_event("on_batch_start")
 
-                # Yield self to allow external control (e.g., engine.step())
                 yield self
 
-                # 更新进度条
                 loss_val = self.loss.item() if self.loss is not None else 0.0
                 
-                lr_str = ""
-                if self.optimizer:
-                    current_lr = self.optimizer.param_groups[0]['lr']
-                    if current_lr < 1e-6:
-                        lr_str = f" LR: {current_lr:.2e}"
-                    else:
-                        lr_str = f" LR: {current_lr:.6f}"
-                    
-                    if self.is_in_warmup():
-                        lr_str += " [Warmup]"
+                if not disable_progress:
+                    lr_str = ""
+                    if self.optimizer:
+                        current_lr = self.optimizer.param_groups[0]['lr']
+                        if current_lr < 1e-6:
+                            lr_str = f" LR: {current_lr:.2e}"
+                        else:
+                            lr_str = f" LR: {current_lr:.6f}"
+                        
+                        if self.is_in_warmup():
+                            lr_str += " [Warmup]"
 
-                logs = f"Loss: {loss_val:.4f}{lr_str} [Ep {self.epoch+1}/{self.num_epochs}]"
-                progress.update(task, advance=1, description=logs)
+                    logs = f"Loss: {loss_val:.4f}{lr_str} [Ep {self.epoch+1}/{self.num_epochs}]"
+                    progress.update(task, advance=1, description=logs)
                 
                 self._fire_event("on_batch_end")
                 
@@ -598,7 +632,10 @@ class Engine:
             self.is_epoch_end = False
 
     def _eval_epoch_iterator(self, loader: Any, total_steps: Optional[int] = None, prefix: str = "Eval ", color: str = "yellow"):
-        '''生成器：执行单个 Epoch 的验证/测试循环。'''
+        '''生成器：执行单个 Epoch 的验证/测试循环。
+        
+        注意：进度条仅在主进程中显示。
+        '''
         self.model.eval()
         
         try:
@@ -607,6 +644,7 @@ class Engine:
             real_len = None
             
         num_batches = total_steps if total_steps is not None else real_len
+        disable_progress = not self.accelerator.is_main_process
         
         with Progress(
             TextColumn(f"[{color}]{prefix}"),
@@ -615,7 +653,8 @@ class Engine:
             MofNCompleteColumn(),
             TimeRemainingColumn(),
             console=self.console,
-            transient=True
+            transient=True,
+            disable=disable_progress
         ) as progress:
             lr_str = ""
             if self.optimizer:
@@ -627,6 +666,7 @@ class Engine:
                 
                 if self.is_in_warmup():
                     lr_str += " [Warmup]"
+            
             task = progress.add_task(f"{lr_str} [Ep {self.epoch+1}/{self.num_epochs}]", total=num_batches)
             
             with torch.no_grad():
@@ -647,8 +687,9 @@ class Engine:
                     yield self
                     
                     loss_val = self.loss.item() if self.loss is not None else 0.0
-                    logs = f"Loss: {loss_val:.4f}{lr_str} [Ep {self.epoch+1}/{self.num_epochs}]"
-                    progress.update(task, advance=1, description=logs)
+                    if not disable_progress:
+                        logs = f"Loss: {loss_val:.4f}{lr_str} [Ep {self.epoch+1}/{self.num_epochs}]"
+                        progress.update(task, advance=1, description=logs)
                     self._fire_event("on_batch_end")
 
     def train(
@@ -660,12 +701,15 @@ class Engine:
     ):
         '''生成器：启动训练循环，允许用户自定义 Step 逻辑。
 
+        此方法会自动使用 accelerator.prepare 包装数据加载器。
+
         Args:
             train_loader (Any): 训练数据加载器。
             num_epochs (int, optional): 总训练轮数。
             start_epoch (int, optional): 起始 Epoch。
             total_steps (int, optional): 手动指定进度条的总步数 (用于特殊 Loader)。
         '''
+        train_loader = self.accelerator.prepare(train_loader)
         self.train_loader = train_loader
         self.num_epochs = num_epochs
         if start_epoch is not None:
@@ -680,7 +724,6 @@ class Engine:
                 
                 self._fire_event("on_epoch_start")
                 
-                # 使用生成器迭代
                 epoch_loss_sum = 0.0
                 count = 0
                 
@@ -698,7 +741,6 @@ class Engine:
 
                 self._fire_event("on_epoch_end")
                 
-                # 计算并打印 Epoch 总结
                 avg_loss = epoch_loss_sum / count if count > 0 else 0.0
                 self.metrics['train_loss'] = avg_loss
                 
@@ -734,11 +776,14 @@ class Engine:
     ):
         '''生成器：启动评估循环。
 
+        此方法会自动使用 accelerator.prepare 包装数据加载器。
+
         Args:
             val_loader (Any): 验证数据加载器。
             total_steps (int, optional): 手动指定进度条的总步数。
             description (str, optional): 进度条描述。
         '''
+        val_loader = self.accelerator.prepare(val_loader)
         self.val_loader = val_loader
         self.state = "EVAL"
         self._fire_event("on_eval_start")

@@ -44,7 +44,8 @@ setup(
         'einops',
         'tokenizers',
         'transformers',
-        'safetensors'
+        'safetensors',
+        'accelerate'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
