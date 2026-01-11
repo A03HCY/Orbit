@@ -1,5 +1,9 @@
 import torch
 import torch.nn as nn
+import json
+
+from safetensors.torch import save_file as safe_save_file
+from safetensors.torch import load_file as safe_load_file
 
 from orbit.model.block import LinearLoRA, Conv2dLoRA, Conv1dLoRA, EmbeddingLoRA
 
@@ -271,14 +275,31 @@ def inject_lora_file(
         raise FileNotFoundError(f"File not found: {path}")
         
     device = next(model.parameters()).device
-    checkpoint = torch.load(path, map_location=device)
     
-    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-        state_dict = checkpoint['model_state_dict']
-        config = checkpoint.get('orbit_lora_config', {})
+    config = {}
+    state_dict = {}
+    
+    if path.endswith('.safetensors'):
+        # 加载 safetensors
+        state_dict = safe_load_file(path, device=str(device))
+        
+        # 尝试读取 metadata
+        from safetensors.torch import safe_open
+        with safe_open(path, framework="pt", device=str(device)) as f:
+            metadata = f.metadata()
+            if metadata and 'orbit_lora_config' in metadata:
+                try:
+                    config = json.loads(metadata['orbit_lora_config'])
+                except:
+                    pass
     else:
-        state_dict = checkpoint
-        config = {}
+        checkpoint = torch.load(path, map_location=device)
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+            config = checkpoint.get('orbit_lora_config', {})
+        else:
+            state_dict = checkpoint
+            config = {}
         
     r = config.get('r', 8)
     alpha = config.get('alpha', 16)
@@ -332,7 +353,10 @@ def save_lora(model: nn.Module, path: str):
         if 'lora_' in key:
             lora_state_dict[key] = value
             
-    torch.save(lora_state_dict, path)
+    if path.endswith('.safetensors'):
+        safe_save_file(lora_state_dict, path)
+    else:
+        torch.save(lora_state_dict, path)
     print(f"LoRA weights saved to {path}. Size: {len(lora_state_dict)} keys.")
 
 def load_lora(model: nn.Module, path: str):
@@ -346,12 +370,15 @@ def load_lora(model: nn.Module, path: str):
         path (str): 权重文件路径。
     '''
     device = next(model.parameters()).device
-    checkpoint = torch.load(path, map_location=device)
     
-    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-        lora_state_dict = checkpoint['model_state_dict']
+    if path.endswith('.safetensors'):
+        lora_state_dict = safe_load_file(path, device=str(device))
     else:
-        lora_state_dict = checkpoint
+        checkpoint = torch.load(path, map_location=device)
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            lora_state_dict = checkpoint['model_state_dict']
+        else:
+            lora_state_dict = checkpoint
 
     missing, unexpected = model.load_state_dict(lora_state_dict, strict=False)
     

@@ -1,10 +1,11 @@
 import os
 import torch
 import inspect
+import json
 
 from typing import Optional, List, TYPE_CHECKING
 from orbit.callback import Event
-from orbit.plugin.checkpoint import Checkpoint
+from orbit.plugin.checkpoint import Checkpoint, safe_save_file, safe_load_file, safe_open
 from orbit.utils.lora import inject_lora, freeze_backbone_only
 
 if TYPE_CHECKING: from orbit.engine import Engine
@@ -34,6 +35,7 @@ class LoRA(Checkpoint):
         save_top_k: int = 1,
         save_last: bool = True,
         every_n_train_steps: Optional[int] = None,
+        use_safetensors: bool = False,
         verbose: bool = True
     ):
         '''初始化 LoRA 插件。
@@ -54,6 +56,7 @@ class LoRA(Checkpoint):
             save_top_k (int): 保存最佳模型数量。
             save_last (bool): 是否保存最后的模型。
             every_n_train_steps (int, optional): 每 N 步保存一次。
+            use_safetensors (bool): 是否使用 safetensors 格式保存。
             verbose (bool): 是否打印日志。
         '''
         # 初始化 Checkpoint，强制 save_weights_only=False 以保留训练状态，
@@ -67,6 +70,7 @@ class LoRA(Checkpoint):
             save_top_k=save_top_k,
             save_last=save_last,
             every_n_train_steps=every_n_train_steps,
+            use_safetensors=use_safetensors,
             verbose=verbose
         )
         
@@ -185,27 +189,47 @@ class LoRA(Checkpoint):
                 if key not in lora_state_dict:
                     lora_state_dict[key] = value
         
-        state = {
-            'epoch': engine.epoch,
-            'global_step': engine.global_step,
-            'batch_idx': engine.batch_idx,
-            'is_step': is_step,
-            'model_state_dict': lora_state_dict,
-            'optimizer_state_dict': engine.optimizer.state_dict() if engine.optimizer else None,
-            'scheduler_state_dict': engine.scheduler.state_dict() if engine.scheduler else None,
-            'scaler_state_dict': engine.scaler.state_dict() if engine.scaler else None,
-            'meta': engine.meta,
-            'orbit_lora_config': {
-                'r': self.r,
-                'alpha': self.lora_alpha,
-                'target_names': self.target_names,
-                'unlock_head_keywords': self.unlock_head_keywords
-            }
+        lora_config = {
+            'r': self.r,
+            'alpha': self.lora_alpha,
+            'target_names': self.target_names,
+            'unlock_head_keywords': self.unlock_head_keywords
         }
         
         file_path = os.path.join(self.path, filename)
+        
         try:
-            torch.save(state, file_path)
+            if self.use_safetensors and filename.endswith('.safetensors'):
+                # Safetensors 模式
+                metadata = {
+                    'epoch': str(engine.epoch),
+                    'global_step': str(engine.global_step),
+                    'batch_idx': str(engine.batch_idx),
+                    'is_step': str(is_step),
+                    'orbit_lora_config': json.dumps(lora_config)
+                }
+                try:
+                    metadata['meta'] = json.dumps(engine.meta)
+                except: pass
+                
+                safe_save_file(lora_state_dict, file_path, metadata=metadata)
+                
+            else:
+                # Torch 模式
+                state = {
+                    'epoch': engine.epoch,
+                    'global_step': engine.global_step,
+                    'batch_idx': engine.batch_idx,
+                    'is_step': is_step,
+                    'model_state_dict': lora_state_dict,
+                    'optimizer_state_dict': engine.optimizer.state_dict() if engine.optimizer else None,
+                    'scheduler_state_dict': engine.scheduler.state_dict() if engine.scheduler else None,
+                    'scaler_state_dict': engine.scaler.state_dict() if engine.scaler else None,
+                    'meta': engine.meta,
+                    'orbit_lora_config': lora_config
+                }
+                torch.save(state, file_path)
+                
             if verbose:
                 rel_path = os.path.relpath(file_path)
                 file_size = os.path.getsize(file_path) / 1024 / 1024
@@ -217,24 +241,34 @@ class LoRA(Checkpoint):
         """重写加载逻辑，支持 strict=False 加载。"""
         engine.print(f"[cyan]Loading LoRA checkpoint from: {file_path}[/]", plugin='LoRA')
         try:
-            checkpoint = torch.load(file_path, map_location=engine.device)
             raw_model = engine.unwrap_model()
+            model_sd = None
+            saved_config = {}
+            
+            if file_path.endswith('.safetensors'):
+                model_sd = safe_load_file(file_path, device=str(engine.device))
+                
+                with safe_open(file_path, framework="pt", device=str(engine.device)) as f:
+                    metadata = f.metadata()
+                    if metadata and 'orbit_lora_config' in metadata:
+                        try:
+                            saved_config = json.loads(metadata['orbit_lora_config'])
+                        except: pass
+            else:
+                checkpoint = torch.load(file_path, map_location=engine.device)
+                if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                    model_sd = checkpoint['model_state_dict']
+                    saved_config = checkpoint.get('orbit_lora_config', {})
+                else:
+                    model_sd = checkpoint if not isinstance(checkpoint, dict) else checkpoint
 
             # 1. 加载模型参数
-            model_sd = None
-            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                model_sd = checkpoint['model_state_dict']
-                
+            if model_sd is not None:
                 # 配置检查
-                saved_config = checkpoint.get('orbit_lora_config', {})
                 if saved_config:
                     if saved_config.get('r') != self.r:
                         engine.print(f"[yellow]Warning: Loaded LoRA rank ({saved_config.get('r')}) != Current rank ({self.r})[/]", plugin='LoRA')
-            else:
-                # 兼容旧格式或纯权重文件
-                model_sd = checkpoint if not isinstance(checkpoint, dict) else checkpoint
-
-            if model_sd is not None:
+                
                 missing, unexpected = raw_model.load_state_dict(model_sd, strict=False)
                 
                 # 过滤掉骨干网络的缺失警告，只关注 LoRA 部分
@@ -244,40 +278,67 @@ class LoRA(Checkpoint):
                 else:
                     engine.print("[green]LoRA weights loaded successfully.[/]", plugin='LoRA')
 
-            # 2. 恢复训练状态 (仅当是完整的 Checkpoint 字典时)
-            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                if engine.optimizer and 'optimizer_state_dict' in checkpoint:
-                    try:
-                        engine.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                    except Exception as e:
-                        engine.print(f"[yellow]Warning: Failed to load optimizer state: {e}.[/]", plugin='LoRA')
+            # 2. 恢复训练状态
+            if file_path.endswith('.safetensors'):
+                # Safetensors 仅恢复元数据
+                with safe_open(file_path, framework="pt", device=str(engine.device)) as f:
+                    metadata = f.metadata()
+                    if metadata:
+                        loaded_epoch = int(metadata.get('epoch', 0))
+                        loaded_batch_idx = int(metadata.get('batch_idx', -1))
+                        is_step = metadata.get('is_step', 'False') == 'True'
+                        engine.global_step = int(metadata.get('global_step', 0))
+                        
+                        if 'meta' in metadata:
+                            try:
+                                engine.meta.update(json.loads(metadata['meta']))
+                            except: pass
+                        
+                        if is_step:
+                            engine.start_epoch = loaded_epoch
+                            engine.start_batch_idx = loaded_batch_idx
+                            msg = f"Epoch {engine.start_epoch}, Batch {engine.start_batch_idx + 1}"
+                        else:
+                            engine.start_epoch = loaded_epoch + 1
+                            engine.start_batch_idx = -1
+                            msg = f"Epoch {engine.start_epoch}"
+                            
+                        engine.print(f"[green]Resumed training from {msg}. Note: Optimizer state not restored (safetensors).[/]", plugin='LoRA')
+            else:
+                # Torch 恢复完整状态
+                if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                    if engine.optimizer and 'optimizer_state_dict' in checkpoint:
+                        try:
+                            engine.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                        except Exception as e:
+                            engine.print(f"[yellow]Warning: Failed to load optimizer state: {e}.[/]", plugin='LoRA')
 
-                if engine.scheduler and 'scheduler_state_dict' in checkpoint:
-                    try:
-                        engine.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-                    except: pass
-                
-                if engine.scaler and 'scaler_state_dict' in checkpoint:
-                    engine.scaler.load_state_dict(checkpoint['scaler_state_dict'])
-                
-                if 'meta' in checkpoint:
-                    engine.meta.update(checkpoint['meta'])
+                    if engine.scheduler and 'scheduler_state_dict' in checkpoint:
+                        try:
+                            engine.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                        except: pass
+                    
+                    if engine.scaler and 'scaler_state_dict' in checkpoint:
+                        engine.scaler.load_state_dict(checkpoint['scaler_state_dict'])
+                    
+                    if 'meta' in checkpoint:
+                        engine.meta.update(checkpoint['meta'])
 
-                loaded_epoch = checkpoint.get('epoch', 0)
-                loaded_batch_idx = checkpoint.get('batch_idx', -1)
-                is_step = checkpoint.get('is_step', False)
-                
-                if is_step:
-                    engine.start_epoch = loaded_epoch
-                    engine.start_batch_idx = loaded_batch_idx
-                    msg = f"Epoch {engine.start_epoch}, Batch {engine.start_batch_idx + 1}"
-                else:
-                    engine.start_epoch = loaded_epoch + 1
-                    engine.start_batch_idx = -1
-                    msg = f"Epoch {engine.start_epoch}"
+                    loaded_epoch = checkpoint.get('epoch', 0)
+                    loaded_batch_idx = checkpoint.get('batch_idx', -1)
+                    is_step = checkpoint.get('is_step', False)
+                    
+                    if is_step:
+                        engine.start_epoch = loaded_epoch
+                        engine.start_batch_idx = loaded_batch_idx
+                        msg = f"Epoch {engine.start_epoch}, Batch {engine.start_batch_idx + 1}"
+                    else:
+                        engine.start_epoch = loaded_epoch + 1
+                        engine.start_batch_idx = -1
+                        msg = f"Epoch {engine.start_epoch}"
 
-                engine.global_step = checkpoint.get('global_step', 0)
-                engine.print(f"[green]Resuming training from {msg}[/]", plugin='LoRA')
+                    engine.global_step = checkpoint.get('global_step', 0)
+                    engine.print(f"[green]Resuming training from {msg}[/]", plugin='LoRA')
                 
         except Exception as e:
             engine.print(f"[red]Failed to load checkpoint: {e}[/]", plugin='LoRA')

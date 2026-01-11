@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 from typing import Union
 
+from safetensors.torch import save_file as safe_save_file
+from safetensors.torch import load_file as safe_load_file
+
 def get_model_by_name(model: nn.Module, name: str) -> nn.Module:
     '''通过名称获取模型的子模块。
     
@@ -32,7 +35,10 @@ def save_layer(model: nn.Module, layer_name: str, file_path: str) -> None:
         file_path (str): 保存路径。
     '''
     module = get_model_by_name(model, layer_name)
-    torch.save(module.state_dict(), file_path)
+    if file_path.endswith('.safetensors'):
+        safe_save_file(module.state_dict(), file_path)
+    else:
+        torch.save(module.state_dict(), file_path)
 
 def load_layer(
     model: nn.Module, 
@@ -50,7 +56,10 @@ def load_layer(
         strict (bool): 是否严格匹配键值。默认为 True。
         map_location (str or torch.device): 加载位置。默认为 'cpu'。
     '''
-    state_dict = torch.load(file_path, map_location=map_location)
+    if file_path.endswith('.safetensors'):
+        state_dict = safe_load_file(file_path, device=str(map_location))
+    else:
+        state_dict = torch.load(file_path, map_location=map_location)
 
     if isinstance(state_dict, dict) and 'model_state_dict' in state_dict:
         state_dict = state_dict['model_state_dict']
@@ -75,7 +84,10 @@ def save_model(model: nn.Module, file_path: str) -> None:
         model (nn.Module): 目标模型。
         file_path (str): 保存路径。
     '''
-    torch.save(model.state_dict(), file_path)
+    if file_path.endswith('.safetensors'):
+        safe_save_file(model.state_dict(), file_path)
+    else:
+        torch.save(model.state_dict(), file_path)
 
 def load_model(
     model: nn.Module, 
@@ -91,7 +103,10 @@ def load_model(
         strict (bool): 是否严格匹配键值。默认为 True。
         map_location (str or torch.device): 加载位置。默认为 'cpu'。
     '''
-    state_dict = torch.load(file_path, map_location=map_location)
+    if file_path.endswith('.safetensors'):
+        state_dict = safe_load_file(file_path, device=str(map_location))
+    else:
+        state_dict = torch.load(file_path, map_location=map_location)
 
     if isinstance(state_dict, dict) and 'model_state_dict' in state_dict:
         state_dict = state_dict['model_state_dict']

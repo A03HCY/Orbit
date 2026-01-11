@@ -43,7 +43,8 @@ setup(
         'scikit-learn',
         'einops',
         'tokenizers',
-        'transformers'
+        'transformers',
+        'safetensors'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
