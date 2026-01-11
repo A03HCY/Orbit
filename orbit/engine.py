@@ -371,6 +371,10 @@ class Engine:
         original_loss = loss
         self.loss = loss
 
+        if self.optimizer is None:
+            self.global_step += 1
+            return
+
         # 梯度累积处理
         backward_loss = loss
         if self.accumulation_steps > 1:
