@@ -4,13 +4,8 @@ import re
 import torch
 import torch.nn as nn
 from torch.nn.init import _calculate_fan_in_and_fan_out
-
-try:
-    from rich.console import Console
-    from rich.table import Table
-    RICH_AVAILABLE = True
-except ImportError:
-    RICH_AVAILABLE = False
+from rich.console import Console
+from rich.table import Table
 
 def _no_grad_trunc_normal_(tensor, mean, std, a, b):
     '''截断正态分布初始化的辅助函数，在无梯度模式下运行。
@@ -68,10 +63,62 @@ def constant_init(module, val, bias=0):
         val (float): 权重的常数值。
         bias (float): 偏置的常数值。
     '''
+    if isinstance(module, (nn.Parameter, torch.Tensor)):
+        nn.init.constant_(module, val)
+        return
+
     if hasattr(module, 'weight') and module.weight is not None:
         nn.init.constant_(module.weight, val)
     if hasattr(module, 'bias') and module.bias is not None:
         nn.init.constant_(module.bias, bias)
+
+def _init_tensor_impl(tensor, method, distribution, a, mode, nonlinearity, gain, std, trunc_a, trunc_b):
+    '''内部函数：对单个张量应用初始化方法。'''
+    info = ""
+    if method == 'kaiming':
+        if distribution == 'uniform':
+            nn.init.kaiming_uniform_(
+                tensor, a=a, mode=mode, nonlinearity=nonlinearity)
+        else:
+            nn.init.kaiming_normal_(
+                tensor, a=a, mode=mode, nonlinearity=nonlinearity)
+        info = f'Kaiming ({distribution}), mode={mode}, nonlin={nonlinearity}'
+    
+    elif method == 'xavier':
+        if distribution == 'uniform':
+            nn.init.xavier_uniform_(tensor, gain=gain)
+        else:
+            nn.init.xavier_normal_(tensor, gain=gain)
+        info = f'Xavier ({distribution}), gain={gain}'
+    
+    elif method == 'c2_xavier':
+        fan_in, fan_out = _calculate_fan_in_and_fan_out(tensor)
+        c2_std = math.sqrt(1.0 / float(fan_in))
+        nn.init.normal_(tensor, mean=0.0, std=c2_std)
+        info = f'C2 Xavier (Normal), std={c2_std:.4f}'
+        
+    elif method == 'orthogonal':
+        nn.init.orthogonal_(tensor, gain=gain)
+        info = f'Orthogonal, gain={gain}'
+        
+    elif method == 'trunc_normal':
+        trunc_normal_(
+            tensor, mean=0., std=std, a=trunc_a, b=trunc_b)
+        info = f'Trunc Normal, std={std}, a={trunc_a}, b={trunc_b}'
+    
+    elif method == 'normal':
+        nn.init.normal_(tensor, mean=0., std=std)
+        info = f'Normal, std={std}'
+        
+    elif method == 'constant':
+        nn.init.constant_(tensor, val=gain)
+        info = f'Constant, val={gain}'
+        
+    else:
+        nn.init.xavier_uniform_(tensor, gain=gain)
+        info = f'Xavier (Uniform) [Default], gain={gain}'
+        
+    return info
 
 def init_weights(module, method='kaiming', distribution='normal', bias=0, 
                  a=0, mode='fan_out', nonlinearity='relu', 
@@ -98,45 +145,56 @@ def init_weights(module, method='kaiming', distribution='normal', bias=0,
         std (float): Normal/Truncated Normal 的标准差。
         trunc_a (float): Truncated Normal 的下界。
         trunc_b (float): Truncated Normal 的上界。
+        
+    Returns:
+        str: 初始化详情字符串，如果未执行初始化则返回 None。
     '''
-    if hasattr(module, 'weight') and module.weight is not None:
-        if method == 'kaiming':
-            if distribution == 'uniform':
-                nn.init.kaiming_uniform_(
-                    module.weight, a=a, mode=mode, nonlinearity=nonlinearity)
-            else:
-                nn.init.kaiming_normal_(
-                    module.weight, a=a, mode=mode, nonlinearity=nonlinearity)
-        
-        elif method == 'xavier':
-            if distribution == 'uniform':
-                nn.init.xavier_uniform_(module.weight, gain=gain)
-            else:
-                nn.init.xavier_normal_(module.weight, gain=gain)
-        
-        elif method == 'c2_xavier':
-            fan_in, fan_out = _calculate_fan_in_and_fan_out(module.weight)
-            c2_std = math.sqrt(1.0 / float(fan_in))
-            nn.init.normal_(module.weight, mean=0.0, std=c2_std)
-            
-        elif method == 'orthogonal':
-            nn.init.orthogonal_(module.weight, gain=gain)
-            
-        elif method == 'trunc_normal':
-            trunc_normal_(
-                module.weight, mean=0., std=std, a=trunc_a, b=trunc_b)
-        
-        elif method == 'normal':
-            nn.init.normal_(module.weight, mean=0., std=std)
-            
-        elif method == 'constant':
-            nn.init.constant_(module.weight, val=gain)
-            
-        else:
-            nn.init.xavier_uniform_(module.weight, gain=gain)
+    # 1. 直接处理 Parameter/Tensor
+    if isinstance(module, (nn.Parameter, torch.Tensor)):
+        return _init_tensor_impl(module, method, distribution, a, mode, nonlinearity, gain, std, trunc_a, trunc_b)
 
+    # 2. 处理 Module
+    info_parts = []
+    handled_params = set()
+
+    def init_and_record(tensor, name, is_bias=False):
+        if id(tensor) in handled_params:
+            return
+        
+        if is_bias:
+            nn.init.constant_(tensor, bias)
+            # 简化输出：如果是标准的 bias 且值为 0，可能不需要太详细，但为了清晰还是保留
+            info = f"bias={bias}" if name == 'bias' else f"{name}: Constant({bias})"
+        else:
+            info = _init_tensor_impl(tensor, method, distribution, a, mode, nonlinearity, gain, std, trunc_a, trunc_b)
+            if name != 'weight':
+                info = f"{name}: {info}"
+            
+        info_parts.append(info)
+        handled_params.add(id(tensor))
+
+    # A. 优先处理标准属性 'weight'
+    if hasattr(module, 'weight') and module.weight is not None:
+        init_and_record(module.weight, 'weight', is_bias=False)
+
+    # B. 优先处理标准属性 'bias'
     if hasattr(module, 'bias') and module.bias is not None:
-        nn.init.constant_(module.bias, bias)
+        init_and_record(module.bias, 'bias', is_bias=True)
+
+    # C. 遍历所有注册参数 (处理自定义名称)
+    # recurse=False 确保只处理当前模块的直接参数
+    for name, param in module.named_parameters(recurse=False):
+        if id(param) in handled_params:
+            continue
+        
+        # 启发式规则：维度 < 2 视为偏置类参数，否则视为权重类参数
+        is_bias_like = param.ndim < 2
+        init_and_record(param, name, is_bias=is_bias_like)
+
+    if not info_parts:
+        return None
+        
+    return ", ".join(info_parts)
 
 def init_layer_norm(module, weight=1.0, bias=0.0):
     '''初始化 LayerNorm 或 GroupNorm 模块。
@@ -145,11 +203,21 @@ def init_layer_norm(module, weight=1.0, bias=0.0):
         module (nn.Module): 归一化模块。
         weight (float): 权重的初始值 (gamma)。
         bias (float): 偏置的初始值 (beta)。
+        
+    Returns:
+        str: 初始化详情字符串。
     '''
+    initialized = False
     if hasattr(module, 'weight') and module.weight is not None:
         nn.init.constant_(module.weight, weight)
+        initialized = True
     if hasattr(module, 'bias') and module.bias is not None:
         nn.init.constant_(module.bias, bias)
+        initialized = True
+        
+    if initialized:
+        return f'Norm (w={weight}, b={bias})'
+    return None
 
 def init_embedding(module, init_method='normal', std=0.02, a=0., b=1., padding_idx=None):
     '''初始化 Embedding 层。
@@ -161,17 +229,32 @@ def init_embedding(module, init_method='normal', std=0.02, a=0., b=1., padding_i
         a (float): 均匀分布的下界或截断正态分布的下界。
         b (float): 均匀分布的上界或截断正态分布的上界。
         padding_idx (int, optional): 如果指定，padding 索引的权重将被初始化为 0。
+        
+    Returns:
+        str: 初始化详情字符串。
     '''
-    if hasattr(module, 'weight') and module.weight is not None:
-        if init_method == 'normal':
-            nn.init.normal_(module.weight, mean=0., std=std)
-        elif init_method == 'trunc_normal':
-            trunc_normal_(module.weight, mean=0., std=std, a=a, b=b)
-        elif init_method == 'uniform':
-            nn.init.uniform_(module.weight, a=a, b=b)
+    if not (hasattr(module, 'weight') and module.weight is not None):
+        return None
+        
+    info = ""
+    if init_method == 'normal':
+        nn.init.normal_(module.weight, mean=0., std=std)
+        info = f'Normal (std={std})'
+    elif init_method == 'trunc_normal':
+        trunc_normal_(module.weight, mean=0., std=std, a=a, b=b)
+        info = f'Trunc Normal (std={std}, [{a}, {b}])'
+    elif init_method == 'uniform':
+        nn.init.uniform_(module.weight, a=a, b=b)
+        info = f'Uniform ([{a}, {b}])'
+    else:
+        nn.init.normal_(module.weight, mean=0., std=std)
+        info = f'Normal (std={std})'
     
     if padding_idx is not None:
         module.weight.data[padding_idx].zero_()
+        info += f', pad_idx={padding_idx}'
+        
+    return info
 
 def init_weights_transformer(model, n_layer=None, initializer_range=0.02, 
                              residual_proj_names=('linear_out', 'fc2', 'c_proj'),
@@ -277,6 +360,25 @@ class WeightInitializer:
         '''
         init_info = []
 
+        # 处理单个 Parameter/Tensor
+        if isinstance(model, (nn.Parameter, torch.Tensor)):
+            info = init_weights(
+                model,
+                method=self.method,
+                distribution=self.distribution,
+                bias=self.init_bias,
+                mode=self.mode,
+                nonlinearity=self.nonlinearity,
+                std=self.std,
+                trunc_a=self.trunc_a,
+                trunc_b=self.trunc_b
+            )
+            if info:
+                init_info.append(('Parameter/Tensor', type(model).__name__, info))
+            if verbose:
+                _print_init_info(init_info)
+            return
+
         for name, module in model.named_modules():
             current_config = {}
             if override:
@@ -291,8 +393,19 @@ class WeightInitializer:
             nonlinearity = current_config.get('nonlinearity', self.nonlinearity)
             std = current_config.get('std', self.std)
             
-            if isinstance(module, (nn.Conv2d, nn.Conv1d, nn.Conv3d, nn.Linear)):
-                init_weights(
+            info = None
+            
+            if isinstance(module, (nn.LayerNorm, nn.BatchNorm2d, nn.GroupNorm, nn.BatchNorm1d)):
+                info = init_layer_norm(
+                    module, weight=self.init_norm_weight, bias=self.init_norm_bias)
+            
+            elif isinstance(module, nn.Embedding):
+                emb_method = method if method in ['normal', 'trunc_normal', 'uniform'] else 'normal'
+                info = init_embedding(module, init_method=emb_method, std=std)
+            
+            else:
+                # 尝试通用初始化 (Linear, Conv, 或其他带 weight/bias 的层)
+                info = init_weights(
                     module,
                     method=method,
                     distribution=distribution,
@@ -303,31 +416,15 @@ class WeightInitializer:
                     trunc_a=self.trunc_a,
                     trunc_b=self.trunc_b
                 )
-                info = f'{method} ({distribution})'
-                if method == 'kaiming':
-                    info += f', mode={mode}, nonlin={nonlinearity}'
-                elif method == 'normal':
-                    info += f', std={std}'
+            
+            if info:
                 init_info.append((name, module.__class__.__name__, info))
-            
-            elif isinstance(module, (nn.LayerNorm, nn.BatchNorm2d, nn.GroupNorm, nn.BatchNorm1d)):
-                init_layer_norm(
-                    module, weight=self.init_norm_weight, bias=self.init_norm_bias)
-                init_info.append((name, module.__class__.__name__, 'Norm (1/0)'))
-            
-            elif isinstance(module, nn.Embedding):
-                init_embedding(
-                    module, 
-                    init_method=method if method in ['normal', 'trunc_normal', 'uniform'] else 'normal', 
-                    std=std
-                )
-                init_info.append((name, 'Embedding', f'{method} (std={std})'))
 
         if verbose:
             _print_init_info(init_info)
 
 def _print_init_info(init_info):
-    '''打印初始化信息的辅助函数，支持 rich 美化。
+    '''打印初始化信息的辅助函数，使用 rich 美化。
     
     Args:
         init_info (list): 包含 (layer_name, module_type, details) 元组的列表。
@@ -335,22 +432,16 @@ def _print_init_info(init_info):
     if not init_info:
         return
 
-    if RICH_AVAILABLE:
-        console = Console()
-        table = Table(title="Weight Initialization Report", show_header=True, header_style="bold magenta")
-        table.add_column("Layer Name", style="cyan")
-        table.add_column("Module Type", style="green")
-        table.add_column("Initialization Details", style="yellow")
+    console = Console()
+    table = Table(title="Weight Initialization Report", show_header=True, header_style="bold magenta")
+    table.add_column("Layer Name", style="cyan")
+    table.add_column("Module Type", style="green")
+    table.add_column("Initialization Details", style="yellow")
 
-        for name, type_name, details in init_info:
-            table.add_row(name, type_name, details)
-        
-        console.print(table)
-    else:
-        print(f"{'Layer Name':<40} | {'Module Type':<20} | {'Initialization Details'}")
-        print("-" * 90)
-        for name, type_name, details in init_info:
-            print(f"{name:<40} | {type_name:<20} | {details}")
+    for name, type_name, details in init_info:
+        table.add_row(str(name), str(type_name), str(details))
+    
+    console.print(table)
 
 def initialize_weights(model, method='kaiming', override=None, verbose=False, **kwargs):
     '''初始化模型权重的便捷函数。
@@ -398,6 +489,9 @@ class AutoInitializer:
             'transformer_detected': False
         }
         
+        if isinstance(self.model, (nn.Parameter, torch.Tensor)):
+            return stats
+
         # 简单的深度估计：计算包含参数的层数
         param_layers = [m for m in self.model.modules() if isinstance(m, (nn.Linear, nn.Conv2d, nn.Conv1d))]
         stats['depth'] = len(param_layers)
@@ -471,16 +565,12 @@ class AutoInitializer:
         method, nonlinearity, override = self.recommend_config()
         
         if verbose:
-            if RICH_AVAILABLE:
-                console = Console()
-                console.print(f"[bold cyan]Auto Initialization Analysis:[/bold cyan]")
-                console.print(f"  Depth: {self.stats['depth']}")
-                console.print(f"  Activations: {self.stats['activations']}")
-                console.print(f"  Transformer Detected: {self.stats['transformer_detected']}")
-                console.print(f"[bold green]Recommended Strategy:[/bold green] {method} (nonlin={nonlinearity})")
-            else:
-                print(f"Auto Init: Depth={self.stats['depth']}, Acts={self.stats['activations']}")
-                print(f"Strategy: {method}, {nonlinearity}")
+            console = Console()
+            console.print(f"[bold cyan]Auto Initialization Analysis:[/bold cyan]")
+            console.print(f"  Depth: {self.stats['depth']}")
+            console.print(f"  Activations: {self.stats['activations']}")
+            console.print(f"  Transformer Detected: {self.stats['transformer_detected']}")
+            console.print(f"[bold green]Recommended Strategy:[/bold green] {method} (nonlin={nonlinearity})")
 
         initialize_weights(
             self.model, 

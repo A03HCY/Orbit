@@ -36,13 +36,13 @@ class BaseBlock(nn.Module):
         except StopIteration:
             return torch.device('cpu')
 
-    def _init_weights(self, model: nn.Module):
+    def _init_weights(self, model: Union[nn.Module, 'BaseBlock', nn.Parameter, torch.Tensor]):
         ''' 初始化模型权重。
 
         Args:
-            model (nn.Module): 需要初始化的模型。
+            model (Union[nn.Module, 'BaseBlock', nn.Parameter, torch.Tensor]): 需要初始化的模型、层或张量。
         '''
-        auto_initialize(model=model)
+        auto_initialize(model=model, verbose=False)
     
     def set_checkpoint(self, value: bool):
         ''' 设置是否启用梯度检查点。
