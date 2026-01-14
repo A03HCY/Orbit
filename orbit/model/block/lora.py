@@ -146,9 +146,6 @@ class LinearLoRA(BaseBlock):
         if self.r > 0 and self.merged:
             if self.dora:
                 print("Warning: DoRA weights cannot be unmerged exactly. Original weights are lost.")
-                # We can't easily recover W0 from W_final = m * (W0 + BA) / ||...||
-                # So we just set merged to False and hope the user knows what they are doing (e.g. for training continuation, but W0 is now modified)
-                # Ideally, one should save initial W0 if unmerge is required.
                 pass 
             else:
                 delta_w = (self.lora_b @ self.lora_a) * self.scaling
@@ -308,7 +305,6 @@ class Conv2dLoRA(BaseBlock):
         else:
             self.dora_m = None
 
-        # 确保 LoRA 参数与原始层在同一设备上
         if hasattr(self.original_layer, 'weight'):
             self.to(self.original_layer.weight.device)
 
@@ -526,7 +522,6 @@ class Conv1dLoRA(BaseBlock):
         else:
             self.dora_m = None
 
-        # 确保 LoRA 参数与原始层在同一设备上
         if hasattr(self.original_layer, 'weight'):
             self.to(self.original_layer.weight.device)
 
@@ -693,7 +688,6 @@ class EmbeddingLoRA(BaseBlock):
         else:
             self.dora_m = None
 
-        # 确保 LoRA 参数与原始层在同一设备上
         if hasattr(self.original_layer, 'weight'):
             self.to(self.original_layer.weight.device)
 
@@ -702,9 +696,7 @@ class EmbeddingLoRA(BaseBlock):
 
     def reset_parameters(self):
         if self.r > 0:
-            # A: 0 初始化
             nn.init.zeros_(self.lora_a.weight)
-            # B: Normal 初始化
             nn.init.normal_(self.lora_b.weight, mean=0.0, std=0.02)
 
     def merge(self):

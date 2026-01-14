@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from dataclasses import dataclass
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple
 
 from orbit.model import BaseBlock, register_model
 
@@ -219,14 +219,11 @@ class PredictiveCodingLayer(BaseBlock):
             torch.Tensor: 更新后的隐藏状态。
         '''
         with torch.enable_grad():
-            # 启用状态的梯度追踪
             state = state.detach().requires_grad_(True)
             
-            # 1. 生成预测（自顶向下生成）
             # pred_x = g(state @ W.T)
             pred_x = self.output_activation(self.decode(state))
             
-            # 2. 计算能量（预测误差）
             # Energy = 0.5 * || (x - pred_x) * mask ||^2
             error = x - pred_x
             if mask is not None:
@@ -234,20 +231,15 @@ class PredictiveCodingLayer(BaseBlock):
                 
             energy = 0.5 * torch.sum(error ** 2)
             
-            # 如果适用，添加自顶向下的先验能量
             # Energy += 0.5 * || state - top_down_input ||^2
             if top_down_input is not None:
                 energy = energy + 0.5 * torch.sum((state - top_down_input) ** 2)
                 
-            # 3. 计算能量相对于状态的梯度
             # dEnergy/dState
             grad_state = torch.autograd.grad(energy, state)[0]
         
-        # 4. 更新状态（能量梯度下降）
         # state = state - lr * grad
         new_state = state - self.lr_state * grad_state
-        
-        # 对状态应用激活函数
         new_state = self.activation(new_state)
         
         return new_state.detach()
@@ -274,14 +266,9 @@ class PredictiveCodingLayer(BaseBlock):
         if top_down_input is not None and top_down_input.dim() > 2: 
             top_down_input = top_down_input.reshape(-1, self.out_features)
 
-        # 初始化状态
-        # 使用简单的前向传播进行初始化
-        # 注意：这是一个近似值，理想情况下我们可能希望从随机或 0 开始
-        # 但前向传播初始化可以加速收敛。
         with torch.no_grad():
             state = self.activation(self.encode(x))
         
-        # 迭代推理
         for _ in range(self.num_iter):
             state = self.step(x, state, mask, top_down_input)
             
@@ -291,7 +278,6 @@ class PredictiveCodingLayer(BaseBlock):
         if len(original_shape) > 2:
             state = state.reshape(original_shape[:-1] + (self.out_features,))
         
-        # 计算重构
         with torch.no_grad():
             state_flat = state.reshape(-1, self.out_features) if state.dim() > 2 else state
             pred_x = self.output_activation(self.decode(state_flat))
@@ -323,15 +309,11 @@ class PredictiveCodingLayer(BaseBlock):
             x (torch.Tensor): 输入观测值。
             state (torch.Tensor): 隐藏状态。
         '''
-        # 我们需要计算权重的梯度。
-        # 因为我们正在进行手动更新，这里也可以使用 autograd。
-        
-        # 分离输入以确保仅进行局部学习
         x = x.detach()
         state = state.detach()
         
         if self.separate_weights:
-            # 1. 更新 Decoder: 最小化预测误差 || x - decoder(state) ||^2
+            # || x - decoder(state) ||^2
             pred_x = self.output_activation(self.decoder(state))
             error = x - pred_x
             loss_decoder = 0.5 * torch.sum(error ** 2)
@@ -344,8 +326,7 @@ class PredictiveCodingLayer(BaseBlock):
                 self.decoder.weight.data -= self.lr_weight * self.decoder.weight.grad
                 self.decoder.weight.grad.zero_()
                 
-            # 2. 更新 Encoder: 最小化 || state - encoder(x) ||^2 (Amortized Inference)
-            # 我们希望 encoder 能够预测最终收敛的状态
+            # || state - encoder(x) ||^2 (Amortized Inference)
             pred_state = self.activation(self.encoder(x))
             loss_encoder = 0.5 * torch.sum((state - pred_state) ** 2)
             
@@ -357,33 +338,19 @@ class PredictiveCodingLayer(BaseBlock):
                 self.encoder.weight.data -= self.lr_weight * self.encoder.weight.grad
                 self.encoder.weight.grad.zero_()
         else:
-            # 临时启用权重的梯度（对于 Parameters 默认应该已启用）
-            
-            # 前向传播
             pred_x = self.output_activation(F.linear(state, self.weight.t()))
             
-            # 损失
             error = x - pred_x
             loss = 0.5 * torch.sum(error ** 2)
             
-            # 反向传播以获取权重的梯度
-            # 我们需要先清除现有的梯度吗？
-            # 因为我们在手动循环中，应该小心。
-            # 但这里我们只想要这个批次的梯度。
             if self.weight.grad is not None:
                 self.weight.grad.zero_()
                 
             loss.backward()
             
-            # 手动更新
             with torch.no_grad():
                 # weight = weight - lr * grad
-                # 注意：我们想要最小化预测误差。
-                # 计算出的梯度是 dLoss/dWeight。
-                # 所以我们减去它。
                 self.weight.data -= self.lr_weight * self.weight.grad
-                
-                # 清除梯度
                 self.weight.grad.zero_()
 
     def get_prediction_error(self, x: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
@@ -446,14 +413,11 @@ class PredictiveCodingBlock(BaseBlock):
         self.num_iter = num_iter
         self.auto_update = auto_update
         
-        # 默认输出激活函数
         if output_activations is None:
             output_activations = []
-            # 第 0 层（输入重构）：Sigmoid（用于 [0,1] 图像）
-            output_activations.append(nn.Sigmoid())
-            # 后续层：Tanh（用于隐藏状态）
+            output_activations.append(nn.LeakyReLU())
             for _ in range(len(self.dims) - 2):
-                output_activations.append(nn.Tanh())
+                output_activations.append(nn.LeakyReLU())
         
         self.layers: nn.ModuleList[PredictiveCodingLayer] = nn.ModuleList()
         for i in range(len(self.dims) - 1):
@@ -485,36 +449,25 @@ class PredictiveCodingBlock(BaseBlock):
         if x.dim() > 2: x = x.reshape(-1, self.dims[0])
         if mask is not None and mask.dim() > 2: mask = mask.reshape(-1, self.dims[0])
         
-        # 1. 初始化状态（自底向上过程）
         states = []
         curr_input = x
         for layer in self.layers:
-            # 使用前向传播初始化状态
             s = layer.activation(layer.encode(curr_input))
             states.append(s)
             curr_input = s
             
-        # 2. 联合迭代推理
         for _ in range(self.num_iter):
-            # 计算所有层的自顶向下预测
-            # top_down_preds[i] 是来自第 i+1 层对第 i 层的预测
             top_down_preds = [None] * len(self.layers)
             for i in range(len(self.layers) - 1):
-                # 第 i+1 层预测第 i 层的状态
-                # Prediction = g(State_{i+1} @ Weight_{i+1}.T)
-                # 注意：第 i+1 层的权重将 State_{i+1} 映射到 State_i（其输入）
-                # 我们必须使用该层的 output_activation
                 with torch.no_grad():
                     top_down_preds[i] = self.layers[i+1].output_activation(
                         self.layers[i+1].decode(states[i+1])
                     )
                 
-            # 更新所有层的状态
             new_states = []
             for i, layer in enumerate(self.layers):
-                # 该层的输入
                 inp = x if i == 0 else states[i-1]
-                # 掩码仅适用于第一层（观测层）
+                
                 msk = mask if i == 0 else None
                 
                 new_s = layer.step(
@@ -526,21 +479,16 @@ class PredictiveCodingBlock(BaseBlock):
                 new_states.append(new_s)
             states = new_states
             
-        # 3. 权重更新
         if self.training and self.auto_update:
             for i, layer in enumerate(self.layers):
                 inp = x if i == 0 else states[i-1]
                 layer._update_weights(inp, states[i])
         
-        # 返回第 1 层的状态用于重构目的
-        # 或者如果我们想要特征，我们可以返回最顶层的状态。
-        # 但为了与 PredictiveCodingLayer 保持一致，我们返回解释输入的状态。
         state1 = states[0]
         
         if len(original_shape) > 2:
             state1 = state1.reshape(original_shape[:-1] + (self.dims[1],))
         
-        # 计算重构
         with torch.no_grad():
             state1_flat = state1.reshape(-1, self.dims[1]) if state1.dim() > 2 else state1
             pred_x = self.layers[0].output_activation(self.layers[0].decode(state1_flat))
