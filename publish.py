@@ -54,6 +54,7 @@ def main():
         build()
         check_twine()
         upload()
+        clean()
         print('All publish tasks completed successfully.')
     except KeyboardInterrupt:
         print('\nOperation cancelled by user.')

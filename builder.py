@@ -63,6 +63,7 @@ def main():
         clean()
         build()
         install()
+        clean()
         print('All tasks completed successfully.')
     except subprocess.CalledProcessError as e:
         print(f'An error occurred: {e}')

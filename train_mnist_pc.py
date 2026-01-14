@@ -56,7 +56,7 @@ class PCNet(nn.Module):
         self.pc_block = PredictiveCodingBlock(
             in_features=self.total_features,
             hidden_dims=hidden_dims,
-            num_iter=25,
+            num_iter=30,
             lr_state=0.1,
             lr_weight=0.001,
             auto_update=True,
@@ -84,7 +84,8 @@ class PCForward(Forward):
             x_in = torch.cat([img_flat, label_onehot], dim=1)
             
             # Forward (updates weights internally)
-            state1 = engine.model(x_in)
+            pc_output = engine.model(x_in)
+            state1 = pc_output.output
             
             # Calculate reconstruction error (Layer 1)
             error = model.pc_block.get_prediction_error(x_in, state1)

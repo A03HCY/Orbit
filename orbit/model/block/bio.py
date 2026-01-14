@@ -1,10 +1,17 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from typing import Iterable
+from dataclasses import dataclass
+from typing import Optional, Tuple, List
 
 from orbit.model import BaseBlock, register_model
+
+
+@dataclass
+class PredictiveCodingOutput:
+    output: torch.Tensor
+    reconstruction: Optional[torch.Tensor] = None
+    hidden_states: Optional[Tuple[torch.Tensor, ...]] = None
 
 
 @register_model()
@@ -144,7 +151,8 @@ class PredictiveCodingLayer(BaseBlock):
         lr_weight: float = 1e-3,
         auto_update: bool = True,
         activation: nn.Module = nn.Tanh(),
-        output_activation: nn.Module = nn.Identity()
+        output_activation: nn.Module = nn.Identity(),
+        separate_weights: bool = False
     ):
         ''' 初始化预测编码层。
 
@@ -157,6 +165,7 @@ class PredictiveCodingLayer(BaseBlock):
             auto_update (bool, optional): 是否在 forward 中自动更新权重。默认为 True。
             activation (nn.Module, optional): 状态激活函数。默认为 nn.Tanh()。
             output_activation (nn.Module, optional): 输出生成激活函数。默认为 nn.Identity()。
+            separate_weights (bool, optional): 是否使用分离的编码器和解码器权重。默认为 False。
         '''
         super(PredictiveCodingLayer, self).__init__()
         self.in_features = in_features
@@ -167,10 +176,28 @@ class PredictiveCodingLayer(BaseBlock):
         self.auto_update = auto_update
         self.activation = activation
         self.output_activation = output_activation
+        self.separate_weights = separate_weights
         
-        self.weight = nn.Parameter(torch.Tensor(out_features, in_features))
+        if self.separate_weights:
+            self.encoder = nn.Linear(in_features, out_features, bias=False)
+            self.decoder = nn.Linear(out_features, in_features, bias=False)
+        else:
+            self.weight = nn.Parameter(torch.Tensor(out_features, in_features))
+            
         self._init_weights(self)
     
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        ''' 将输入投影到隐藏状态空间（线性变换）。 '''
+        if self.separate_weights:
+            return self.encoder(x)
+        return F.linear(x, self.weight)
+
+    def decode(self, state: torch.Tensor) -> torch.Tensor:
+        ''' 将隐藏状态投影回输入空间（线性变换）。 '''
+        if self.separate_weights:
+            return self.decoder(state)
+        return F.linear(state, self.weight.t())
+
     def step(
         self, 
         x: torch.Tensor, 
@@ -197,7 +224,7 @@ class PredictiveCodingLayer(BaseBlock):
             
             # 1. 生成预测（自顶向下生成）
             # pred_x = g(state @ W.T)
-            pred_x = self.output_activation(F.linear(state, self.weight.t()))
+            pred_x = self.output_activation(self.decode(state))
             
             # 2. 计算能量（预测误差）
             # Energy = 0.5 * || (x - pred_x) * mask ||^2
@@ -230,7 +257,7 @@ class PredictiveCodingLayer(BaseBlock):
         x: torch.Tensor, 
         mask: torch.Tensor = None, 
         top_down_input: torch.Tensor = None
-    ) -> torch.Tensor:
+    ) -> PredictiveCodingOutput:
         ''' 前向传播。
         
         Args:
@@ -239,7 +266,7 @@ class PredictiveCodingLayer(BaseBlock):
             top_down_input (torch.Tensor, optional): 来自高层的预测/先验。
             
         Returns:
-            torch.Tensor: 最终的隐藏状态 (Batch, ..., Out_Features)。
+            PredictiveCodingOutput: 包含最终隐藏状态和重构结果的对象。
         '''
         original_shape = x.shape
         if x.dim() > 2: x = x.reshape(-1, self.in_features)
@@ -252,7 +279,7 @@ class PredictiveCodingLayer(BaseBlock):
         # 注意：这是一个近似值，理想情况下我们可能希望从随机或 0 开始
         # 但前向传播初始化可以加速收敛。
         with torch.no_grad():
-            state = self.activation(F.linear(x, self.weight))
+            state = self.activation(self.encode(x))
         
         # 迭代推理
         for _ in range(self.num_iter):
@@ -263,8 +290,18 @@ class PredictiveCodingLayer(BaseBlock):
             
         if len(original_shape) > 2:
             state = state.reshape(original_shape[:-1] + (self.out_features,))
-            
-        return state
+        
+        # 计算重构
+        with torch.no_grad():
+            state_flat = state.reshape(-1, self.out_features) if state.dim() > 2 else state
+            pred_x = self.output_activation(self.decode(state_flat))
+            if len(original_shape) > 2:
+                pred_x = pred_x.reshape(original_shape)
+
+        return PredictiveCodingOutput(
+            output=state,
+            reconstruction=pred_x
+        )
     
     def predict(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
         ''' 执行推理并返回重构的输入（包括未观测部分）。
@@ -276,18 +313,8 @@ class PredictiveCodingLayer(BaseBlock):
         Returns:
             torch.Tensor: 重构/预测的输入 (Batch, ..., In_Features)。
         '''
-        state = self.forward(x, mask)
-        
-        original_shape = x.shape
-        if state.dim() > 2: state = state.reshape(-1, self.out_features)
-        
-        with torch.no_grad():
-            pred_x = self.output_activation(F.linear(state, self.weight.t()))
-        
-        if len(original_shape) > 2:
-            pred_x = pred_x.reshape(original_shape)
-            
-        return pred_x
+        pc_output = self.forward(x, mask)
+        return pc_output.reconstruction
     
     def _update_weights(self, x: torch.Tensor, state: torch.Tensor):
         ''' 更新权重以最小化预测误差。
@@ -303,34 +330,61 @@ class PredictiveCodingLayer(BaseBlock):
         x = x.detach()
         state = state.detach()
         
-        # 临时启用权重的梯度（对于 Parameters 默认应该已启用）
-        
-        # 前向传播
-        pred_x = self.output_activation(F.linear(state, self.weight.t()))
-        
-        # 损失
-        error = x - pred_x
-        loss = 0.5 * torch.sum(error ** 2)
-        
-        # 反向传播以获取权重的梯度
-        # 我们需要先清除现有的梯度吗？
-        # 因为我们在手动循环中，应该小心。
-        # 但这里我们只想要这个批次的梯度。
-        if self.weight.grad is not None:
-            self.weight.grad.zero_()
+        if self.separate_weights:
+            # 1. 更新 Decoder: 最小化预测误差 || x - decoder(state) ||^2
+            pred_x = self.output_activation(self.decoder(state))
+            error = x - pred_x
+            loss_decoder = 0.5 * torch.sum(error ** 2)
             
-        loss.backward()
-        
-        # 手动更新
-        with torch.no_grad():
-            # weight = weight - lr * grad
-            # 注意：我们想要最小化预测误差。
-            # 计算出的梯度是 dLoss/dWeight。
-            # 所以我们减去它。
-            self.weight.data -= self.lr_weight * self.weight.grad
+            if self.decoder.weight.grad is not None:
+                self.decoder.weight.grad.zero_()
+            loss_decoder.backward()
             
-            # 清除梯度
-            self.weight.grad.zero_()
+            with torch.no_grad():
+                self.decoder.weight.data -= self.lr_weight * self.decoder.weight.grad
+                self.decoder.weight.grad.zero_()
+                
+            # 2. 更新 Encoder: 最小化 || state - encoder(x) ||^2 (Amortized Inference)
+            # 我们希望 encoder 能够预测最终收敛的状态
+            pred_state = self.activation(self.encoder(x))
+            loss_encoder = 0.5 * torch.sum((state - pred_state) ** 2)
+            
+            if self.encoder.weight.grad is not None:
+                self.encoder.weight.grad.zero_()
+            loss_encoder.backward()
+            
+            with torch.no_grad():
+                self.encoder.weight.data -= self.lr_weight * self.encoder.weight.grad
+                self.encoder.weight.grad.zero_()
+        else:
+            # 临时启用权重的梯度（对于 Parameters 默认应该已启用）
+            
+            # 前向传播
+            pred_x = self.output_activation(F.linear(state, self.weight.t()))
+            
+            # 损失
+            error = x - pred_x
+            loss = 0.5 * torch.sum(error ** 2)
+            
+            # 反向传播以获取权重的梯度
+            # 我们需要先清除现有的梯度吗？
+            # 因为我们在手动循环中，应该小心。
+            # 但这里我们只想要这个批次的梯度。
+            if self.weight.grad is not None:
+                self.weight.grad.zero_()
+                
+            loss.backward()
+            
+            # 手动更新
+            with torch.no_grad():
+                # weight = weight - lr * grad
+                # 注意：我们想要最小化预测误差。
+                # 计算出的梯度是 dLoss/dWeight。
+                # 所以我们减去它。
+                self.weight.data -= self.lr_weight * self.weight.grad
+                
+                # 清除梯度
+                self.weight.grad.zero_()
 
     def get_prediction_error(self, x: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
         ''' 计算预测误差。
@@ -347,7 +401,7 @@ class PredictiveCodingLayer(BaseBlock):
             state = state.reshape(-1, self.out_features)
             
         with torch.no_grad():
-            pred_x = self.output_activation(F.linear(state, self.weight.t()))
+            pred_x = self.output_activation(self.decode(state))
             return x - pred_x
 
 
@@ -367,7 +421,8 @@ class PredictiveCodingBlock(BaseBlock):
         lr_weight: float = 1e-3,
         auto_update: bool = True,
         activation: nn.Module = nn.Tanh(),
-        output_activations: list[nn.Module] = None
+        output_activations: list[nn.Module] = None,
+        separate_weights: bool = False
     ):
         ''' 初始化分层预测编码块。
 
@@ -380,6 +435,7 @@ class PredictiveCodingBlock(BaseBlock):
             auto_update (bool, optional): 是否自动更新权重。
             activation (nn.Module, optional): 状态激活函数。
             output_activations (list[nn.Module], optional): 每层的输出激活函数列表。
+            separate_weights (bool, optional): 是否使用分离的编码器和解码器权重。
         '''
         super(PredictiveCodingBlock, self).__init__()
         
@@ -411,10 +467,11 @@ class PredictiveCodingBlock(BaseBlock):
                 lr_weight=lr_weight,
                 auto_update=False,
                 activation=activation,
-                output_activation=out_act
+                output_activation=out_act,
+                separate_weights=separate_weights
             ))
             
-    def forward(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, mask: torch.Tensor = None) -> PredictiveCodingOutput:
         ''' 前向传播（联合推理）。
         
         Args:
@@ -422,7 +479,7 @@ class PredictiveCodingBlock(BaseBlock):
             mask (torch.Tensor, optional): 输入层的误差掩码。
             
         Returns:
-            torch.Tensor: 第一层的隐藏状态 (用于重构输入)。
+            PredictiveCodingOutput: 包含第一层隐藏状态、重构结果和所有层状态的对象。
         '''
         original_shape = x.shape
         if x.dim() > 2: x = x.reshape(-1, self.dims[0])
@@ -433,7 +490,7 @@ class PredictiveCodingBlock(BaseBlock):
         curr_input = x
         for layer in self.layers:
             # 使用前向传播初始化状态
-            s = layer.activation(F.linear(curr_input, layer.weight))
+            s = layer.activation(layer.encode(curr_input))
             states.append(s)
             curr_input = s
             
@@ -449,7 +506,7 @@ class PredictiveCodingBlock(BaseBlock):
                 # 我们必须使用该层的 output_activation
                 with torch.no_grad():
                     top_down_preds[i] = self.layers[i+1].output_activation(
-                        F.linear(states[i+1], self.layers[i+1].weight.t())
+                        self.layers[i+1].decode(states[i+1])
                     )
                 
             # 更新所有层的状态
@@ -482,22 +539,24 @@ class PredictiveCodingBlock(BaseBlock):
         
         if len(original_shape) > 2:
             state1 = state1.reshape(original_shape[:-1] + (self.dims[1],))
+        
+        # 计算重构
+        with torch.no_grad():
+            state1_flat = state1.reshape(-1, self.dims[1]) if state1.dim() > 2 else state1
+            pred_x = self.layers[0].output_activation(self.layers[0].decode(state1_flat))
+            if len(original_shape) > 2:
+                pred_x = pred_x.reshape(original_shape)
             
-        return state1
+        return PredictiveCodingOutput(
+            output=state1,
+            reconstruction=pred_x,
+            hidden_states=tuple(states)
+        )
 
     def predict(self, x: torch.Tensor, mask: torch.Tensor = None) -> torch.Tensor:
         ''' 执行推理并返回重构的输入。 '''
-        state1 = self.forward(x, mask)
-        
-        original_shape = x.shape
-        if state1.dim() > 2: state1 = state1.reshape(-1, self.dims[1])
-        
-        pred_x = self.layers[0].output_activation(F.linear(state1, self.layers[0].weight.t()))
-        
-        if len(original_shape) > 2:
-            pred_x = pred_x.reshape(original_shape)
-            
-        return pred_x
+        pc_output = self.forward(x, mask)
+        return pc_output.reconstruction
     
     def get_prediction_error(self, x: torch.Tensor, state1: torch.Tensor) -> torch.Tensor:
         ''' 计算输入层的预测误差。 '''
