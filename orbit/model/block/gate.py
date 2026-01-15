@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from dataclasses import dataclass
 
 from orbit.model import BaseBlock, register_model
 from orbit.model.block.mlp import MLP
@@ -250,6 +251,19 @@ class GLUGate(BaseBlock):
         return self.out_proj(x)
 
 
+@dataclass
+class TopKGateOutput:
+    logits: torch.Tensor
+    indices: torch.Tensor
+    values: torch.Tensor
+
+    @property
+    def output(self) -> torch.Tensor:
+        output = torch.zeros_like(self.logits)
+        output.scatter_(-1, self.indices, self.values)
+        return output
+
+
 @register_model()
 class TopKGate(BaseGate):
     ''' Top-K 门控模块。
@@ -297,15 +311,14 @@ class TopKGate(BaseGate):
         args.append(f"post_softmax={self.post_softmax}")
         return args
 
-    def forward(self, x: torch.Tensor, return_meta: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor) -> TopKGateOutput:
         ''' 前向传播。
 
         Args:
             x (torch.Tensor): 输入张量。
-            return_meta (bool, optional): 是否返回元数据 (logits, indices, values)。默认为 False。
 
         Returns:
-            torch.Tensor: 门控后的输出张量。如果 return_meta=True，则返回 (logits, indices, values)。
+            TopKGateOutput: 包含 logits, indices, values 的数据类。
         '''
         logits = self._transform(x)
         
@@ -314,13 +327,11 @@ class TopKGate(BaseGate):
         if self.post_softmax:
             topk_values = F.softmax(topk_values, dim=-1)
         
-        if return_meta:
-            return logits, topk_indices, topk_values
-
-        output = torch.zeros_like(logits)
-        output.scatter_(-1, topk_indices, topk_values)
-        
-        return output
+        return TopKGateOutput(
+            logits=logits,
+            indices=topk_indices,
+            values=topk_values
+        )
 
 
 @register_model()
@@ -352,9 +363,14 @@ class ContextGate(BaseBlock):
         self.override_repr = override_repr
 
         self.mlp = nn.Sequential(
-            nn.Linear(in_features, self.hidden_features, bias=bias),
-            nn.ReLU(),
-            nn.Linear(self.hidden_features, in_features, bias=bias),
+            MLP(
+                in_features=in_features, 
+                hidden_features=self.hidden_features, 
+                out_features=in_features, 
+                bias=bias,
+                use_gate=False,
+                dropout=0.0
+            ),
             nn.Sigmoid()
         )
 

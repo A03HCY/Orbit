@@ -23,6 +23,7 @@ class MLP(BaseBlock):
         in_features: int,
         hidden_features: int,
         out_features: int = None,
+        bias: bool = True,
         use_gate: bool = False,
         dropout: float = 0.0
     ):
@@ -33,18 +34,18 @@ class MLP(BaseBlock):
         self.in_features = in_features
         self.hidden_features = hidden_features
         self.out_features = out_features
+        self.bias = bias
         self.use_gate = use_gate
         self.dropout = nn.Dropout(dropout)
+        self.act = nn.SiLU()
         
         if use_gate:
-            self.gate_proj = nn.Linear(in_features, hidden_features)
-            self.up_proj = nn.Linear(in_features, hidden_features)
-            self.down_proj = nn.Linear(hidden_features, out_features)
-            self.act = nn.SiLU()
+            self.gate_proj = nn.Linear(in_features, hidden_features, bias=bias)
+            self.up_proj = nn.Linear(in_features, hidden_features, bias=bias)
+            self.down_proj = nn.Linear(hidden_features, out_features, bias=bias)
         else:
-            self.fc1 = nn.Linear(in_features, hidden_features)
-            self.fc2 = nn.Linear(hidden_features, out_features)
-            self.act = nn.GELU()
+            self.fc1 = nn.Linear(in_features, hidden_features, bias=bias)
+            self.fc2 = nn.Linear(hidden_features, out_features, bias=bias)
 
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

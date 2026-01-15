@@ -2,4 +2,4 @@ from orbit.engine import Engine
 
 seed_info = None
 
-__version__ = '0.1.0a4'
+__version__ = '0.1.0a5'

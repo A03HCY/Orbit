@@ -9,10 +9,10 @@ from .mlp  import MLP
 from .moe  import MoE
 from .tcn  import TCN
 from .bio  import HebianLayer, PredictiveCodingLayer
-from .film import FiLM
+from .film import FiLM, FiLMOutput
 from .gate import (
     SigmoidGate, TanhGate, SoftmaxGate, GLUGate,
-    TopKGate, ContextGate
+    TopKGate, ContextGate, TopKGateOutput
 )
 from .conv import (
     CausalConv1d, calculate_causal_layer, ConvBlock, ResBasicBlock
