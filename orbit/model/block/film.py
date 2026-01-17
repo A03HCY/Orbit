@@ -42,14 +42,19 @@ class FiLM(BaseBlock):
         use_beta: bool = True,
         use_gamma: bool = True,
         use_gate: bool = True,
+        use_context_gate: bool = False,
         channel_first: bool = False
     ):
         super(FiLM, self).__init__()
+        
+        if use_context_gate: use_gate = False
+
         self.in_features = in_features
         self.cond_features = cond_features
         self.use_beta = use_beta
         self.use_gamma = use_gamma
         self.use_gate = use_gate
+        self.use_context_gate = use_context_gate
         self.channel_first = channel_first
 
         self.out_dim = 0
@@ -57,11 +62,13 @@ class FiLM(BaseBlock):
         if use_beta:  self.out_dim += in_features
         if use_gate:  self.out_dim += in_features
 
+        self.gate_proj = nn.Linear(in_features + cond_features, in_features) if use_context_gate else nn.Identity()
+
         if self.out_dim > 0:
             self.proj = nn.Linear(cond_features, self.out_dim)
-            nn.init.constant_(self.proj.weight, 0)
-            nn.init.constant_(self.proj.bias, 0)
         else: self.proj = None
+
+        self._init_weights(self)
     
     def _init_weights(self, model: nn.Module):
         ''' 初始化权重。
@@ -71,10 +78,12 @@ class FiLM(BaseBlock):
         Args:
             model (nn.Module): 需要初始化的模型。
         '''
-        if model is self:
+        if model is self and self.proj is not None:
             nn.init.constant_(self.proj.weight, 0)
             nn.init.constant_(self.proj.bias, 0)
-            return
+            if isinstance(self.gate_proj, nn.Identity): return
+            nn.init.xavier_uniform_(self.gate_proj.weight, gain=0.1)
+            nn.init.zeros_(self.gate_proj.bias)
 
     def forward(self, x: torch.Tensor, cond: torch.Tensor) -> FiLMOutput:
         ''' 前向传播。
@@ -82,7 +91,7 @@ class FiLM(BaseBlock):
         Args:
             x (torch.Tensor): 输入特征。形状为 [B, C, ...] (如果 channel_first=True)
                 或 [B, ..., C] (如果 channel_first=False)。
-            cond (torch.Tensor): 条件输入。形状为 [B, cond_features]。
+            cond (torch.Tensor): 条件输入。形状为 [B, ..., cond_features]。
 
         Returns:
             FiLMOutput: 调制后的特征。
@@ -109,19 +118,44 @@ class FiLM(BaseBlock):
             gate = params_list[idx]
             idx += 1
             
-        ndim = x.ndim
-        if self.channel_first:
-            shape = [x.shape[0], self.in_features] + [1] * (ndim - 2)
-        else:
-            shape = [x.shape[0]] + [1] * (ndim - 2) + [self.in_features]
+        def _reshape(param: torch.Tensor) -> torch.Tensor:
+            if self.channel_first:
+                param = param.movedim(-1, 1)
+                for _ in range(x.ndim - param.ndim):
+                    param = param.unsqueeze(-1)
+            else:
+                for _ in range(x.ndim - param.ndim):
+                    param = param.unsqueeze(-2)
+            return param
         
         out = x
         if gamma is not None:
-            out = out * (1 + gamma.view(*shape))
+            out = out * (1 + _reshape(gamma))
         if beta is not None:
-            out = out + beta.view(*shape)
-            
+            out = out + _reshape(beta)
+        
         final_gate = None
-        if gate is not None:
-            final_gate = gate.view(*shape)
+        if self.use_context_gate:
+            if cond.ndim < x.ndim:
+                cond_reshaped = _reshape(cond)
+                expand_shape = list(x.shape)
+                feat_dim = 1 if self.channel_first else -1
+                expand_shape[feat_dim] = -1
+                cond_expanded = cond_reshaped.expand(expand_shape)
+            else:
+                cond_expanded = cond
+            
+            feat_dim = 1 if self.channel_first else -1
+            context_input = torch.cat([x, cond_expanded], dim=feat_dim)
+            
+            if self.channel_first:
+                context_input = context_input.movedim(1, -1)
+                final_gate = self.gate_proj(context_input)
+                final_gate = final_gate.movedim(-1, 1)
+            else:
+                final_gate = self.gate_proj(context_input)
+        
+        elif gate is not None:
+            final_gate = _reshape(gate)
+        
         return FiLMOutput(x=out, gate=final_gate)

@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-from typing import Tuple, Union, Optional
+from typing import Tuple, Union
 
 from orbit.model import BaseBlock, register_model
 
@@ -295,6 +295,94 @@ class ConvBlock(BaseBlock):
             if self.dropout: x = self.dropout(x)
             
         return x
+
+
+@register_model()
+class DepthwiseSeparableConv(BaseBlock):
+    '''
+    深度可分离卷积块 (Depthwise Separable Convolution)。
+    
+    由一个 Depthwise Conv（逐通道卷积）和一个 Pointwise Conv（逐点卷积）组成。
+    在保持特征提取能力的同时，大幅降低参数量和计算开销。
+    '''
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: Union[int, Tuple[int, ...]] = 3,
+        stride: Union[int, Tuple[int, ...]] = 1,
+        padding: Union[int, Tuple[int, ...], str] = 1,
+        dilation: Union[int, Tuple[int, ...]] = 1,
+        bias: bool = False,
+        dim: int = 2,
+        norm: str = 'batch',
+        activation: str = 'relu',
+        dropout: float = 0.0,
+        use_res: bool = True,
+    ):
+        '''
+        初始化 DepthwiseSeparableConv。
+
+        Args:
+            in_channels (int): 输入通道数。
+            out_channels (int): 输出通道数。
+            kernel_size: 卷积核大小。
+            stride: 步幅。
+            padding: 填充。
+            dilation: 膨胀系数。
+            bias (bool): 是否使用偏置。
+            dim (int): 卷积维度 (1, 2, 3)。
+            norm (str): 归一化类型。
+            activation (str): 激活函数类型。
+            dropout (float): Dropout 概率。
+            use_res (bool): 是否在输入输出通道一致且步幅为1时使用残差连接。
+        '''
+        super(DepthwiseSeparableConv, self).__init__()
+
+        self.depthwise = ConvBlock(
+            in_channels=in_channels,
+            out_channels=in_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            groups=in_channels,
+            bias=bias,
+            dim=dim,
+            norm=norm,
+            activation=activation,
+            dropout=0.0
+        )
+
+        self.pointwise = ConvBlock(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+            bias=bias,
+            dim=dim,
+            norm=norm,
+            activation=activation,
+            dropout=dropout
+        )
+
+        self.use_res = use_res and (in_channels == out_channels) and (stride == 1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        '''
+        前向传播。
+        '''
+        identity = x
+        
+        out = self.depthwise(x)
+        out = self.pointwise(out)
+
+        if self.use_res:
+            out += identity
+            
+        return out
 
 
 @register_model()
