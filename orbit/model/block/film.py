@@ -32,6 +32,8 @@ class FiLM(BaseBlock):
         use_beta (bool, optional): 是否使用平移项 (beta)。默认为 True。
         use_gamma (bool, optional): 是否使用缩放项 (gamma)。默认为 True。
         use_gate (bool, optional): 是否使用门控项 (gate)。默认为 True。
+        use_context_gate (bool, optional): 是否使用上下文门控 (context gate)。
+            如果为 True，将使用输入特征和条件特征的拼接来生成门控值，并覆盖 use_gate 的设置。默认为 False。
         channel_first (bool, optional): 特征维度是否在第 1 维 (如 CNN [B, C, H, W])。
             如果为 False，则假设特征在最后一维 (如 Transformer [B, L, C])。默认为 False。
     '''
@@ -74,6 +76,7 @@ class FiLM(BaseBlock):
         ''' 初始化权重。
 
         将投影层的权重和偏置初始化为 0，以确保初始状态为恒等映射。
+        如果使用了上下文门控，其投影层使用 Xavier Uniform 初始化。
 
         Args:
             model (nn.Module): 需要初始化的模型。
@@ -84,6 +87,25 @@ class FiLM(BaseBlock):
             if isinstance(self.gate_proj, nn.Identity): return
             nn.init.xavier_uniform_(self.gate_proj.weight, gain=0.1)
             nn.init.zeros_(self.gate_proj.bias)
+
+    def _reshape(self, param: torch.Tensor, ref_ndim: int) -> torch.Tensor:
+        ''' 调整参数形状以匹配输入特征的维度，以便进行广播。
+
+        Args:
+            param (torch.Tensor): 需要重塑的参数张量。
+            ref_ndim (int): 参考张量（通常是输入特征 x）的维度数。
+
+        Returns:
+            torch.Tensor: 重塑后的参数张量。
+        '''
+        if self.channel_first:
+            param = param.movedim(-1, 1)
+            for _ in range(ref_ndim - param.ndim):
+                param = param.unsqueeze(-1)
+        else:
+            for _ in range(ref_ndim - param.ndim):
+                param = param.unsqueeze(-2)
+        return param
 
     def forward(self, x: torch.Tensor, cond: torch.Tensor) -> FiLMOutput:
         ''' 前向传播。
@@ -117,31 +139,20 @@ class FiLM(BaseBlock):
         if self.use_gate:
             gate = params_list[idx]
             idx += 1
-            
-        def _reshape(param: torch.Tensor) -> torch.Tensor:
-            if self.channel_first:
-                param = param.movedim(-1, 1)
-                for _ in range(x.ndim - param.ndim):
-                    param = param.unsqueeze(-1)
-            else:
-                for _ in range(x.ndim - param.ndim):
-                    param = param.unsqueeze(-2)
-            return param
         
         out = x
         if gamma is not None:
-            out = out * (1 + _reshape(gamma))
+            out = out * (1 + self._reshape(gamma, x.ndim))
         if beta is not None:
-            out = out + _reshape(beta)
+            out = out + self._reshape(beta, x.ndim)
         
         final_gate = None
         if self.use_context_gate:
             if cond.ndim < x.ndim:
-                cond_reshaped = _reshape(cond)
-                expand_shape = list(x.shape)
+                shape = list(x.shape)
                 feat_dim = 1 if self.channel_first else -1
-                expand_shape[feat_dim] = -1
-                cond_expanded = cond_reshaped.expand(expand_shape)
+                shape[feat_dim] = -1
+                cond_expanded = self._reshape(cond, x.ndim).expand(shape)
             else:
                 cond_expanded = cond
             
@@ -150,12 +161,11 @@ class FiLM(BaseBlock):
             
             if self.channel_first:
                 context_input = context_input.movedim(1, -1)
-                final_gate = self.gate_proj(context_input)
-                final_gate = final_gate.movedim(-1, 1)
+                final_gate = self.gate_proj(context_input).movedim(-1, 1)
             else:
                 final_gate = self.gate_proj(context_input)
         
         elif gate is not None:
-            final_gate = _reshape(gate)
+            final_gate = self._reshape(gate, x.ndim)
         
         return FiLMOutput(x=out, gate=final_gate)

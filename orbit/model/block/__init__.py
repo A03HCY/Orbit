@@ -5,6 +5,9 @@ from .embeddng  import (
 from .attention import (
     MultiHeadAttention, apply_attention, AttentionOutput
 )
+from .fusion import (
+    LowRankFusion, GatedMultimodalUnit, DiffusionMapsFusion, CompactMultimodalPooling
+)
 from .mlp  import MLP
 from .moe  import MoE
 from .tcn  import TCN
@@ -15,7 +18,7 @@ from .bio  import (
 from .film import FiLM, FiLMOutput
 from .gate import (
     SigmoidGate, TanhGate, SoftmaxGate, GLUGate,
-    TopKGate, ContextGate, TopKGateOutput
+    TopKGate, TopKGateOutput
 )
 from .conv import (
     CausalConv1d, calculate_causal_layer, ConvBlock,
