@@ -11,11 +11,16 @@ class FiLMOutput:
     ''' FiLM 模块的输出容器。
     
     Attributes:
-        x (torch.Tensor): 经过 gamma 和 beta 调制后的特征。
+        output (torch.Tensor): 经过 gamma 和 beta 调制后的特征。
         gate (Optional[torch.Tensor]): 用于残差连接的门控值。
     '''
-    x: torch.Tensor
+    output: torch.Tensor
     gate: Optional[torch.Tensor] = None
+
+    @property
+    def gated_output(self):
+        if self.gate is None: return self.output
+        return self.output * self.gate
 
 
 @register_model()
@@ -118,7 +123,7 @@ class FiLM(BaseBlock):
         Returns:
             FiLMOutput: 调制后的特征。
         '''
-        if self.proj is None: return FiLMOutput(x=x)
+        if self.proj is None: return FiLMOutput(output=x)
         
         params = self.proj(cond)
         
@@ -168,4 +173,4 @@ class FiLM(BaseBlock):
         elif gate is not None:
             final_gate = self._reshape(gate, x.ndim)
         
-        return FiLMOutput(x=out, gate=final_gate)
+        return FiLMOutput(output=out, gate=final_gate)
