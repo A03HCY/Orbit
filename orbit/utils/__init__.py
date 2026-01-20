@@ -14,7 +14,7 @@ from .freeze import (
     set_trainable,
     freeze_layers,
     unfreeze_layers,
-    get_trainable_params,
+    count_params, ParamStats,
 )
 from .seed import (
     seed_everything,
@@ -46,4 +46,7 @@ from .cuda import (
 )
 from .block import (
     split_to_patches
+)
+from .moe import (
+    set_moe_training_mode
 )
