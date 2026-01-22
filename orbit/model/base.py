@@ -6,7 +6,7 @@ from orbit.utils import (
     auto_initialize,
     freeze_layers,
     unfreeze_layers,
-    get_trainable_params,
+    count_params,
     save_model,
     load_model,
 )
@@ -65,9 +65,9 @@ class BaseBlock(nn.Module):
             int: 参数数量。
         '''
         if trainable_only:
-            return sum(p.numel() for p in get_trainable_params(self))
+            return count_params(self).count
         
-        return sum(p.numel() for p in self.parameters())
+        return count_params(self, mode='all').count
 
     def checkpoint(self, function, *args, **kwargs):
         ''' 应用梯度检查点。

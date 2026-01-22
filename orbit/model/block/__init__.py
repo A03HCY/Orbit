@@ -1,6 +1,7 @@
 from .embeddng  import (
     RotaryPositionalEmbedding,
-    SinusoidalPositionalEmbedding
+    SinusoidalPositionalEmbedding,
+    MRoPEInterleavedEmbedding
 )
 from .attention import (
     MultiHeadAttention, apply_attention, AttentionOutput
