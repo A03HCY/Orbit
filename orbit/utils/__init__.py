@@ -44,7 +44,7 @@ from .sft import (
 from .cuda import (
     cuda_alloc
 )
-from .block import (
+from .image import (
     split_to_patches
 )
 from .moe import (
