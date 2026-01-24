@@ -1,10 +1,14 @@
-from .embeddng  import (
+from .embedding  import (
     RotaryPositionalEmbedding,
     SinusoidalPositionalEmbedding,
     MRoPEInterleavedEmbedding
 )
 from .attention import (
-    MultiHeadAttention, apply_attention, AttentionOutput
+    MultiHeadAttention, apply_attention, AttentionOutput,
+    SpatialMultiHeadAttention
+)
+from .codebook import (
+    LFQ, QuantizerOutput
 )
 from .fusion import (
     LowRankFusion, GatedMultimodalUnit, DiffusionMapsFusion, CompactMultimodalPooling

@@ -45,7 +45,8 @@ setup(
         'tokenizers',
         'transformers',
         'safetensors',
-        'accelerate'
+        'accelerate',
+        'lpips'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',

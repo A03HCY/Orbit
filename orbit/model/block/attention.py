@@ -8,8 +8,8 @@ from typing import Optional, Tuple
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from orbit.model import BaseBlock, register_model
-from orbit.model.block.embeddng import RotaryPositionalEmbedding
-from orbit.model.block.gate     import SigmoidGate
+from orbit.model.block.embedding import RotaryPositionalEmbedding, MRoPEInterleavedEmbedding
+from orbit.model.block.gate      import SigmoidGate
 
 
 @dataclass
@@ -210,4 +210,56 @@ class MultiHeadAttention(BaseBlock):
             output=output,
             attention_weights=attention_weights,
             past_key_value=current_key_value
+        )
+
+
+class SpatialMultiHeadAttention(MultiHeadAttention):
+    '''
+    扩展的 MultiHeadAttention，支持接收 2D 位置索引用于 MRoPE。
+    '''
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        positions: torch.Tensor = None,
+        attention_mask: torch.Tensor = None,
+        rotary_emb: MRoPEInterleavedEmbedding = None,
+        output_attentions: bool = False,
+    ) -> AttentionOutput:
+        
+        batch_size, q_len, _ = hidden_states.shape
+        
+        Q = self.q_proj(hidden_states)
+        K = self.k_proj(hidden_states)
+        V = self.v_proj(hidden_states)
+        
+        Q = Q.view(batch_size, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        K = K.view(batch_size, q_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        V = V.view(batch_size, q_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        
+        if self.use_qk_norm:
+            Q = self.q_norm(Q)
+            K = self.k_norm(K)
+        
+        if rotary_emb is not None and positions is not None:
+            Q = rotary_emb(Q, positions=positions)
+            K = rotary_emb(K, positions=positions)
+        
+        if self.num_kv_queries > 1:
+            K = K.repeat_interleave(self.num_kv_queries, dim=1)
+            V = V.repeat_interleave(self.num_kv_queries, dim=1)
+             
+        attn_output = apply_attention(Q, K, V, attention_mask, output_attentions)
+        
+        output = attn_output.output
+        output = output.transpose(1, 2).contiguous().view(batch_size, q_len, self.hidden_size)
+        
+        output = self.o_proj(output)
+        
+        if self.use_gate:
+            G = self.g_proj(hidden_states)
+            output = output * G
+
+        return AttentionOutput(
+            output=output,
+            attention_weights=attn_output.attention_weights
         )

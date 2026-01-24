@@ -45,7 +45,7 @@ from .cuda import (
     cuda_alloc
 )
 from .image import (
-    split_to_patches
+    split_to_patches, reconstruct_from_patches, pad_to_patch_size
 )
 from .moe import (
     set_moe_training_mode

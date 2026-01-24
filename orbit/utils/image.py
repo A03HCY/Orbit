@@ -10,13 +10,11 @@ class PatchOutput:
     patch_size: Tuple[int, int]
     num_patches: Tuple[int, int]
 
-def split_to_patches(image: torch.Tensor, patch_size: Tuple[int, int]) -> PatchOutput:
-    '''将图像张量分割成多个子图像，支持自动填充。
+def pad_to_patch_size(image: torch.Tensor, patch_size: Tuple[int, int]) -> PatchOutput:
+    '''对图像进行填充以适配补丁大小，不进行分割。
 
     此函数接收形状为 [..., channels, width, height] 的图像张量，
-    并将其划分为形状为 [channels, patch_width, patch_height] 的补丁。
-    如果图像尺寸不能被 patch_size 整除，则在右侧和底部进行零填充。
-    结果张量的形状为 [..., num_patches_total, channels, patch_width, patch_height]。
+    并在右侧和底部进行零填充，使得填充后的尺寸能被 patch_size 整除。
 
     Args:
         image (torch.Tensor): 输入图像张量，形状为 [..., channels, w, h]。
@@ -26,8 +24,8 @@ def split_to_patches(image: torch.Tensor, patch_size: Tuple[int, int]) -> PatchO
 
     Returns:
         PatchOutput: 包含以下字段的数据类：
-            - output (torch.Tensor): 形状为 [..., num_w * num_h, channels, a, b] 的补丁张量。
-            - mask (torch.Tensor): 形状为 [..., num_w * num_h, 1, a, b] 的掩码张量，
+            - output (torch.Tensor): 填充后的图像张量，形状为 [..., channels, w_padded, h_padded]。
+            - mask (torch.Tensor): 形状为 [..., 1, w_padded, h_padded] 的掩码张量，
               有效区域为 1，填充区域为 0。
             - patch_size (Tuple[int, int]): 输入的补丁大小 (a, b)。
             - num_patches (Tuple[int, int]): 宽度和高度方向的补丁数量 (num_w, num_h)。
@@ -54,6 +52,44 @@ def split_to_patches(image: torch.Tensor, patch_size: Tuple[int, int]) -> PatchO
 
     mask = torch.ones((*image.shape[:-3], 1, w, h), dtype=image.dtype, device=image.device)
     mask_padded = F.pad(mask, (0, pad_h, 0, pad_w), value=0)
+
+    return PatchOutput(
+        output=image_padded,
+        mask=mask_padded,
+        patch_size=patch_size,
+        num_patches=(num_w, num_h)
+    )
+
+def split_to_patches(image: torch.Tensor, patch_size: Tuple[int, int]) -> PatchOutput:
+    '''将图像张量分割成多个子图像，支持自动填充。
+
+    此函数接收形状为 [..., channels, width, height] 的图像张量，
+    并将其划分为形状为 [channels, patch_width, patch_height] 的补丁。
+    如果图像尺寸不能被 patch_size 整除，则在右侧和底部进行零填充。
+    结果张量的形状为 [..., num_patches_total, channels, patch_width, patch_height]。
+
+    Args:
+        image (torch.Tensor): 输入图像张量，形状为 [..., channels, w, h]。
+            最后两个维度被视为空间维度（宽度，高度）。
+        patch_size (Tuple[int, int]): 表示补丁大小的元组 (a, b)，其中 'a' 对应于
+            宽度维度，'b' 对应于高度维度。
+
+    Returns:
+        PatchOutput: 包含以下字段的数据类：
+            - output (torch.Tensor): 形状为 [..., num_w * num_h, channels, a, b] 的补丁张量。
+            - mask (torch.Tensor): 形状为 [..., num_w * num_h, 1, a, b] 的掩码张量，
+              有效区域为 1，填充区域为 0。
+            - patch_size (Tuple[int, int]): 输入的补丁大小 (a, b)。
+            - num_patches (Tuple[int, int]): 宽度和高度方向的补丁数量 (num_w, num_h)。
+
+    Raises:
+        ValueError: 如果输入图像维度少于 3。
+    '''
+    padded_output = pad_to_patch_size(image, patch_size)
+    image_padded = padded_output.output
+    mask_padded = padded_output.mask
+    num_w, num_h = padded_output.num_patches
+    a, b = patch_size
 
     def split(x, nw, nh):
         # x shape: [..., C, W, H]
