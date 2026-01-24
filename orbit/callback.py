@@ -7,6 +7,7 @@ if TYPE_CHECKING: from .engine import Engine
 
 @dataclass
 class Event:
+    '''事件数据类，携带当前 Engine 状态及触发源信息。'''
     engine: Engine
     name: str
     source: Optional[str] = None
@@ -44,11 +45,11 @@ class Forward:
         '''执行前向传播并返回 Loss。
 
         Args:
-            engine (Engine): 当前 Engine 实例。可以通过 engine.model 访问模型，通过 engine.criterion 访问损失函数。
+            engine (Engine): 当前 Engine 实例。
             data (Any): 当前 Batch 的输入数据。
             target (Any): 当前 Batch 的目标数据（标签）。
 
         Returns:
-            torch.Tensor: 计算得到的 Loss 标量。Engine 将使用此 Loss 进行反向传播。
+            torch.Tensor: 计算得到的 Loss 标量。
         '''
-        ... # Returns loss
+        ... 

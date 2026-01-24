@@ -100,6 +100,10 @@ class Engine:
         self.forward_step = forward_step
 
         # --- 交互与回调 ---
+        self.prepare  = self.accelerator.prepare
+        self.backward = self.accelerator.backward
+        self.autocast = self.accelerator.autocast
+
         self.console = console if console else Console()
         self.out_logs = self._OutLogs(self)
         self.writer: Optional[SummaryWriter] = None
