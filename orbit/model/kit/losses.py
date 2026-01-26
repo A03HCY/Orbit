@@ -62,7 +62,8 @@ class VQGANLoss(nn.Module):
             pixelloss_weight: float = 1.0, 
             perceptual_weight: float = 1.0,
             disc_weight: float = 0.8,
-            disc_factor: float = 1.0
+            disc_factor: float = 1.0,
+            lpips_backbone: str = 'vgg'
         ):
         ''' 初始化 VQGANLoss。
 
@@ -74,6 +75,7 @@ class VQGANLoss(nn.Module):
             perceptual_weight (float): 感知损失的权重。默认为 1.0。
             disc_weight (float): 判别器损失的权重。默认为 0.8。
             disc_factor (float): 判别器损失的缩放因子。默认为 1.0。
+            lpips_backbone (str): LPIPS 的骨干网络类型 ('vgg', 'alex', 'squeeze')。默认为 'vgg'。
         '''
         super().__init__()
         
@@ -84,7 +86,7 @@ class VQGANLoss(nn.Module):
         self.disc_weight = disc_weight
         self.disc_start = disc_start
         
-        self.perceptual_loss = LPIPS(net='vgg', verbose=False).eval()
+        self.perceptual_loss = LPIPS(net=lpips_backbone, verbose=False).eval()
         
     def calculate_adaptive_weight(self, nll_loss, g_loss, last_layer_weights):
         ''' 计算自适应对抗损失权重 lambda。
@@ -152,13 +154,16 @@ class VQGANLoss(nn.Module):
             logits_fake = discriminator(reconstructions)
             g_loss = -torch.mean(logits_fake)
             
-            try: d_weight = self.calculate_adaptive_weight(rec_loss_total, g_loss, last_layer_weights)
-            except RuntimeError:
-                assert not self.training
-                d_weight = torch.tensor(0.0)
-
             disc_factor = 1 if global_step >= self.disc_start else 0
             
+            if disc_factor > 0:
+                try: d_weight = self.calculate_adaptive_weight(rec_loss_total, g_loss, last_layer_weights)
+                except RuntimeError:
+                    assert not self.training
+                    d_weight = torch.tensor(0.0)
+            else:
+                d_weight = torch.tensor(0.0)
+
             loss = rec_loss_total + \
                    self.kl_weight * quantizer_loss + \
                    d_weight * disc_factor * g_loss

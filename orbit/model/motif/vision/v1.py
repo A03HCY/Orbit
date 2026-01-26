@@ -243,9 +243,9 @@ class MotifV1Encoder(BaseBlock):
         h = self.conv_in(x_in)
         
         for layer in self.down_blocks:
-            h = layer(h)
+            h = self.checkpoint(layer, h)
         
-        h = self.mid_res1(h)
+        h = self.checkpoint(self.mid_res1, h)
         
         B_feat, C_feat, H_feat, W_feat = h.shape
         h_flat = h.permute(0, 2, 3, 1).reshape(B_feat, H_feat * W_feat, C_feat)
@@ -253,14 +253,15 @@ class MotifV1Encoder(BaseBlock):
         positions = self._build_grid(H_feat, W_feat, h.device)
         positions = positions.unsqueeze(0).expand(B_feat, -1, -1)
         
-        attn_out: AttentionOutput = self.mid_attn(
+        attn_out: AttentionOutput = self.checkpoint(
+            self.mid_attn,
             hidden_states=h_flat,
             positions=positions,
             rotary_emb=self.rope
         )
         
         h = attn_out.output.view(B_feat, H_feat, W_feat, C_feat).permute(0, 3, 1, 2)
-        h = self.mid_res2(h)
+        h = self.checkpoint(self.mid_res2, h)
         
         h = self.norm_out(h)
         h = self.act_out(h)
@@ -412,7 +413,7 @@ class MotifV1Decoder(BaseBlock):
         
         h = self.conv_in(z)
         
-        h = self.mid_res1(h)
+        h = self.checkpoint(self.mid_res1, h)
         
         B_feat, C_feat, H_feat, W_feat = h.shape
         h_flat = h.permute(0, 2, 3, 1).reshape(B_feat, H_feat * W_feat, C_feat)
@@ -420,16 +421,18 @@ class MotifV1Decoder(BaseBlock):
         positions = self._build_grid(H_feat, W_feat, h.device)
         positions = positions.unsqueeze(0).expand(B_feat, -1, -1)
         
-        attn_out = self.mid_attn(
+        attn_out = self.checkpoint(
+            self.mid_attn,
             hidden_states=h_flat,
             positions=positions,
             rotary_emb=self.rope
         )
         
         h = attn_out.output.view(B_feat, H_feat, W_feat, C_feat).permute(0, 3, 1, 2)
-        h = self.mid_res2(h)
+        h = self.checkpoint(self.mid_res2, h)
         
-        for layer in self.up_blocks: h = layer(h)
+        for layer in self.up_blocks:
+            h = self.checkpoint(layer, h)
             
         h = self.norm_out(h)
         h = self.act_out(h)
@@ -580,10 +583,10 @@ class MotifV1(BaseBlock):
         z_q = z_q.permute(0, 3, 1, 2).contiguous()
         
         if hasattr(self.quantizer, 'project_out'):
-             z_q_permuted = z_q.permute(0, 2, 3, 1)
-             z_projected = self.quantizer.project_out(z_q_permuted)
-             # [B, H, W, Latent_Dim] -> [B, Latent_Dim, H, W]
-             z_q = z_projected.permute(0, 3, 1, 2).contiguous()
+            z_q_permuted = z_q.permute(0, 2, 3, 1)
+            z_projected = self.quantizer.project_out(z_q_permuted)
+            # [B, H, W, Latent_Dim] -> [B, Latent_Dim, H, W]
+            z_q = z_projected.permute(0, 3, 1, 2).contiguous()
 
         dec_out = self.decoder(z_q, mask)
         return dec_out.reconstruction
@@ -628,7 +631,7 @@ class MotifV1(BaseBlock):
         
         q_out: QuantizerOutput = self.quantizer(enc_out.output)
         
-        dec_out = self.decoder(q_out.z_q, mask)
+        dec_out: DecoderOutput = self.decoder(q_out.z_q, mask)
         
         final_mask = mask if mask is not None else enc_out.mask
         info = MotifV1Info(
