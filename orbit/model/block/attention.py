@@ -25,7 +25,8 @@ def apply_attention(
     value_states: torch.Tensor, 
     attention_mask: torch.Tensor = None, 
     output_attentions: bool = False,
-    is_causal: bool = None
+    is_causal: bool = None,
+    dropout: float = 0.0
 ) -> AttentionOutput:
     ''' 计算缩放点积注意力。
 
@@ -36,6 +37,7 @@ def apply_attention(
         attention_mask (torch.Tensor, optional): 注意力掩码。默认为 None。
         output_attentions (bool, optional): 是否输出注意力权重。默认为 False。
         is_causal (bool, optional): 是否应用因果掩码。默认为 None。
+        dropout (float, optional): Dropout 概率。默认为 0.0。
 
     Returns:
         AttentionOutput: 包含注意力输出和可选权重的对象。
@@ -56,7 +58,7 @@ def apply_attention(
                     value_states, 
                     attn_mask=attention_mask if not is_causal else None, 
                     is_causal=is_causal,
-                    dropout_p=0.0
+                    dropout_p=dropout
                 )
             return AttentionOutput(output=output, attention_weights=None)
         except Exception:
@@ -70,6 +72,10 @@ def apply_attention(
         scores = scores.masked_fill(attention_mask == 0, float('-inf'))
 
     attention_weights = torch.softmax(scores, dim=-1)
+    
+    if dropout > 0.0:
+        attention_weights = F.dropout(attention_weights, p=dropout)
+
     output = torch.matmul(attention_weights, value_states)
     
     return AttentionOutput(output=output, attention_weights=attention_weights)
@@ -87,6 +93,7 @@ class MultiHeadAttention(BaseBlock):
         num_kv_heads (int, optional): 键/值头数，用于 GQA。如果为 None，则等于 num_heads。默认为 None。
         use_qk_norm (bool, optional): 是否对查询和键应用 RMSNorm。默认为 True。
         use_gate (bool, optional): 是否应用门控机制。默认为 False。
+        dropout (float, optional): Dropout 概率。默认为 0.0。
     '''
 
     def __init__(
@@ -95,7 +102,8 @@ class MultiHeadAttention(BaseBlock):
         num_heads,
         num_kv_heads=None,
         use_qk_norm=True,
-        use_gate=False
+        use_gate=False,
+        dropout=0.0
     ):
         super(MultiHeadAttention, self).__init__()
 
@@ -112,6 +120,7 @@ class MultiHeadAttention(BaseBlock):
         self.kv_dim = self.num_kv_heads * self.head_dim
         self.use_qk_norm = use_qk_norm
         self.use_gate = use_gate
+        self.dropout = dropout
 
         if use_qk_norm:
             self.q_norm = nn.RMSNorm(self.head_dim)
@@ -195,7 +204,12 @@ class MultiHeadAttention(BaseBlock):
             K = K.reshape(batch_size, self.num_heads, kv_seq_len_total, self.head_dim)
             V = V.reshape(batch_size, self.num_heads, kv_seq_len_total, self.head_dim)
 
-        attn_output = apply_attention(Q, K, V, attention_mask, output_attentions)
+        attn_output = apply_attention(
+            Q, K, V, 
+            attention_mask=attention_mask, 
+            output_attentions=output_attentions,
+            dropout=self.dropout if self.training else 0.0
+        )
         output = attn_output.output
         attention_weights = attn_output.attention_weights
 
@@ -248,7 +262,12 @@ class SpatialMultiHeadAttention(MultiHeadAttention):
             K = K.repeat_interleave(self.num_kv_queries, dim=1)
             V = V.repeat_interleave(self.num_kv_queries, dim=1)
              
-        attn_output = apply_attention(Q, K, V, attention_mask, output_attentions)
+        attn_output = apply_attention(
+            Q, K, V, 
+            attention_mask=attention_mask, 
+            output_attentions=output_attentions,
+            dropout=self.dropout if self.training else 0.0
+        )
         
         output = attn_output.output
         output = output.transpose(1, 2).contiguous().view(batch_size, q_len, self.hidden_size)

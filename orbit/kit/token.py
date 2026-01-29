@@ -5,10 +5,10 @@ from tokenizers.trainers import BpeTrainer
 
 core_tokens = ['[unk]', '[pad]', '[sep]']
 chat_tokens = [
-    '[im_start]', '[im_end]', '[system]', '[user]', '[model]', '[tool]', '[interruption]'
+    '[im_start]', '[im_end]', '[system]', '[user]', '[model]', '[tool]', '[interruption]', '[fim]',
 ]
 reasoning_tokens = ['[cot_start]', '[cot_end]', '[verification]', '[solution]']
-code_tokens = ['[fim_pre]', '[fim_mid]', '[fim_suf]', '[file_start]', '[file_path]', '[file_end]']
+code_tokens = ['[fim_pre]', '[fim_mid]', '[fim_suf]']
 tool_tokens = ['[tool_start]', '[tool_name]', '[tool_args]', '[tool_end]']
 
 multimodal_tokens = [
@@ -31,65 +31,76 @@ base_special_tokens += [f'[mask_{i}]' for i in range(32)]
 chat_template = (
     "{% for message in messages %}"
         "{{ '[im_start]' }}"
-        
-        "{% if message['role'] == 'system' %}"
-            "{{ '[system]' }}"
-        "{% elif message['role'] == 'user' %}"
-            "{{ '[user]' }}"
-        "{% elif message['role'] in ['assistant', 'model'] %}"
-            "{{ '[model]' }}"
-        "{% elif message['role'] == 'tool' %}"
-            "{{ '[tool]' }}"
+
+        "{% if message['role'] == 'fim' %}"
+            "{{ '[fim]' }}"
+            "{{ '[fim_pre]' + message['prefix'] + '[fim_suf]' + message['suffix'] + '[fim_mid]' }}"
+            
+            "{% if message['middle'] %}"
+                "{{ message['middle'] + '[im_end]' }}"
+            "{% endif %}"
+            
         "{% else %}"
-            "{{ message['role'] }}"
-        "{% endif %}"
-        
-        "{{ '\n' }}"
-        
-        "{% set thought_content = message['thought'] or message['reasoning_content'] %}"
-        "{% if thought_content %}"
-            "{{ '[cot_start]' + thought_content + '[cot_end]\n' }}"
-        "{% endif %}"
-        
-        "{% if message['content'] is defined and message['content'] is not none %}"
             
-            "{% if message['content'] is string %}"
-                "{{ message['content'] }}"
-            
+            "{% if message['role'] == 'system' %}"
+                "{{ '[system]' }}"
+            "{% elif message['role'] == 'user' %}"
+                "{{ '[user]' }}"
+            "{% elif message['role'] in ['assistant', 'model'] %}"
+                "{{ '[model]' }}"
+            "{% elif message['role'] == 'tool' %}"
+                "{{ '[tool]' }}"
             "{% else %}"
-                "{% for item in message['content'] %}"
-                    "{% if item['type'] == 'text' %}"
-                        "{{ item['text'] }}"
-                    "{% elif item['type'] == 'image' %}"
-                        "{{ '[image_start][image_end]' }}"
-                    "{% elif item['type'] == 'audio' %}"
-                        "{{ '[audio_start][audio_end]' }}"
-                    "{% elif item['type'] == 'video' %}"
-                        "{{ '[video_start][video_end]' }}"
-                    "{% endif %}"
+                "{{ message['role'] }}"
+            "{% endif %}"
+
+            "{{ '\n' }}"
+
+            "{% set thought_content = message['thought'] or message['reasoning_content'] %}"
+            "{% if thought_content %}"
+                "{{ '[cot_start]' + thought_content + '[cot_end]\n' }}"
+            "{% endif %}"
+            
+            "{% if message['content'] is defined and message['content'] is not none %}"
+                "{% if message['content'] is string %}"
+                    "{{ message['content'] }}"
+                "{% else %}"
+                    "{% for item in message['content'] %}"
+                        "{% if item['type'] == 'text' %}"
+                            "{{ item['text'] }}"
+                        "{% elif item['type'] == 'image' %}"
+                            "{{ '[image_start][image_end]' }}"
+                        "{% elif item['type'] == 'audio' %}"
+                            "{{ '[audio_start][audio_end]' }}"
+                        "{% elif item['type'] == 'video' %}"
+                            "{{ '[video_start][video_end]' }}"
+                        "{% endif %}"
+                    "{% endfor %}"
+                "{% endif %}"
+            "{% endif %}"
+            
+            "{% if message['tool_calls'] is defined and message['tool_calls'] %}"
+                "{% for tool_call in message['tool_calls'] %}"
+                    "{{ '[tool_start][tool_name]' + tool_call.function.name + '[tool_args]' + tool_call.function.arguments + '[tool_end]' }}"
                 "{% endfor %}"
             "{% endif %}"
             
+            "{{ '[im_end]\n' }}"
         "{% endif %}"
-        
-        "{% if message['tool_calls'] is defined and message['tool_calls'] %}"
-            "{% for tool_call in message['tool_calls'] %}"
-                "{{ '[tool_start][tool_name]' + tool_call.function.name + '[tool_args]' + tool_call.function.arguments + '[tool_end]' }}"
-            "{% endfor %}"
-        "{% endif %}"
-        
-        "{{ '[im_end]\n' }}"
     "{% endfor %}"
     
     "{% if add_generation_prompt %}"
-        "{{ '[im_start][model]\n' }}"
-        "{% if enable_thinking is defined and enable_thinking %}"
-            "{{ '[cot_start]' }}"
-        "{% elif enable_thinking is defined and not enable_thinking %}"
-            "{{ '[cot_start][cot_end]\n' }}"
+        "{% if messages[-1]['role'] != 'fim' %}"
+            "{{ '[im_start][model]\n' }}"
+            "{% if enable_thinking is defined and enable_thinking %}"
+                "{{ '[cot_start]' }}"
+            "{% elif enable_thinking is defined and not enable_thinking %}"
+                "{{ '[cot_start][cot_end]\n' }}"
+            "{% endif %}"
         "{% endif %}"
     "{% endif %}"
 )
+
 
 def create_tokenizer_trainer(
     unk_token: str='[unk]',
@@ -108,7 +119,7 @@ def create_tokenizer_trainer(
             默认为 base_special_tokens，包含核心、聊天、推理、代码、工具及多模态Token。
 
     Returns:
-        BpeTrainer: 配置好的BPE训练器实例，可用于训练分词器。
+        tuple: (tokenizer, trainer) 
     '''
     tokenizer = Tokenizer(BPE(unk_token=unk_token))
 
@@ -129,4 +140,4 @@ def create_tokenizer_trainer(
         min_frequency=2 
     )
 
-    return trainer
+    return tokenizer, trainer
