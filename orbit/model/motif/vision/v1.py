@@ -451,16 +451,16 @@ class MotifV1(BaseBlock):
         in_channels: int = 3,
         out_channels: int = 3,
         latent_dim: int = 256,
-        codebook_dim: int = 18,
+        codebook_dim: int = 16,
         patch_size: int = 16,
         
-        enc_hidden_dim: int = 64,
+        enc_hidden_dim: int = 256,
         enc_num_res_blocks: int = 1,
         enc_num_heads: int = 4,
         enc_max_channels: int = 256,
         
         dec_hidden_dim: int = 256,
-        dec_num_res_blocks: int = 1,
+        dec_num_res_blocks: int = 3,
         dec_num_heads: int = 4,
         
         dropout: float = 0.0,
@@ -476,14 +476,14 @@ class MotifV1(BaseBlock):
             in_channels (int): 输入图像的通道数。默认为 3。
             out_channels (int): 输出图像的通道数。默认为 3。
             latent_dim (int): Encoder 输出和 Decoder 输入的潜在变量维度。默认为 256。
-            codebook_dim (int): LFQ 码本的比特数（维度）。默认为 18。
+            codebook_dim (int): LFQ 码本的比特数（维度）。默认为 16。
             patch_size (int): Patch 大小，必须是 2 的幂。默认为 16。
             enc_hidden_dim (int): Encoder 隐藏层的初始维度。默认为 64。
             enc_num_res_blocks (int): Encoder 每个阶段的残差块数量。默认为 1。
             enc_num_heads (int): Encoder 注意力机制的头数。默认为 4。
             enc_max_channels (int): Encoder 隐藏层通道数的最大值。默认为 256。
             dec_hidden_dim (int): Decoder 隐藏层的初始维度。默认为 256。
-            dec_num_res_blocks (int): Decoder 每个阶段的残差块数量。默认为 1。
+            dec_num_res_blocks (int): Decoder 每个阶段的残差块数量。默认为 3。
             dec_num_heads (int): Decoder 注意力机制的头数。默认为 4。
             dropout (float): Dropout 概率。默认为 0.0。
             rope_max_len (int): RoPE 的最大长度限制。默认为 4096。
