@@ -63,6 +63,8 @@ chat_template = (
             "{% set thought_content = message['thought'] or message['reasoning_content'] %}"
             "{% if thought_content %}"
                 "{{ '[cot_start]' + thought_content + '[cot_end]\n' }}"
+            "{% else %}"
+                "{{ '[cot_start][cot_end]\n' }}"
             "{% endif %}"
             
             "{% if message['content'] is defined and message['content'] is not none %}"

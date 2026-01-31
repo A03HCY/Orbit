@@ -19,7 +19,8 @@ from .freeze import (
 from .seed import (
     seed_everything,
     worker_init_fn,
-    create_generator
+    create_generator,
+    seed_info
 )
 from .mask import (
     make_padding_mask,
@@ -50,3 +51,4 @@ from .image import (
 from .moe import (
     set_moe_training_mode
 )
+from .train import pre_train

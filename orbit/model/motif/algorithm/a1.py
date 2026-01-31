@@ -44,7 +44,7 @@ class A1Decoder(BaseBlock):
             num_heads=num_heads,
             num_kv_heads=num_kv_heads,
             use_qk_norm=True,
-            use_gate=True,
+            use_gate=False,
             dropout=dropout
         )
 
@@ -118,6 +118,7 @@ class A1Model(BaseBlock):
         mlp_ratio (int, optional): MLP 隐藏层比率。默认为 2。
         dropout (float, optional): Dropout 概率。默认为 0.1。
         max_len (int, optional): 最大序列长度。默认为 2048。
+        tie_weights (bool, optional): 是否共享 token_emb 与 proj_out 的权重。默认为 False。
     '''
     def __init__(
         self,
@@ -128,7 +129,8 @@ class A1Model(BaseBlock):
         num_kv_heads: int = 2,
         mlp_ratio: int = 2,
         dropout: float = 0.1,
-        max_len: int = 2048
+        max_len: int = 2048,
+        tie_weights: bool = False
     ):
         super().__init__()
         self.model_dim = model_dim
@@ -153,7 +155,23 @@ class A1Model(BaseBlock):
         ])
         
         self.norm = nn.RMSNorm(model_dim)
-        self.lm_head = nn.Linear(model_dim, vocab_size, bias=False)
+        self.proj_out = nn.Linear(model_dim, vocab_size, bias=False)
+
+        if tie_weights:
+            self.proj_out.weight = self.token_emb.weight
+        
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        std = 0.02
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            if module.padding_idx is not None:
+                torch.nn.init.zeros_(module.weight[module.padding_idx])
         
     def forward(
         self,
@@ -211,7 +229,7 @@ class A1Model(BaseBlock):
                     next_cache.append(output.past_key_value)
                 
         h = self.norm(h)
-        logits = self.lm_head(h)
+        logits = self.proj_out(h)
         
         return A1ModelOutput(
             logits=logits,

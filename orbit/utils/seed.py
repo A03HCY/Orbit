@@ -38,6 +38,10 @@ def seed_everything(seed=42, strict=False, warn_only=True):
     else:
         print(f"[Info] Random seed set as {seed}")
 
+def seed_info() -> int:
+    import orbit
+    return orbit.seed_info if orbit.seed_info else 42
+
 def worker_init_fn(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)

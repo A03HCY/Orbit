@@ -46,7 +46,8 @@ setup(
         'transformers',
         'safetensors',
         'accelerate',
-        'lpips'
+        'lpips',
+        'pyarrow'
     ],
     classifiers=[
         'Programming Language :: Python :: 3',
