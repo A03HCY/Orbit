@@ -5,7 +5,9 @@ from tokenizers.trainers import BpeTrainer
 
 core_tokens = ['[unk]', '[pad]', '[sep]']
 chat_tokens = [
-    '[im_start]', '[im_end]', '[system]', '[user]', '[model]', '[tool]', '[interruption]', '[fim]',
+    '[im_start]', '[im_end]',
+    '[system]', '[user]', '[model]', '[tool]', '[train]',
+    '[interruption]', '[fim]',
 ]
 reasoning_tokens = ['[cot_start]', '[cot_end]', '[verification]', '[solution]']
 code_tokens = ['[fim_pre]', '[fim_mid]', '[fim_suf]']
@@ -13,7 +15,7 @@ tool_tokens = ['[tool_start]', '[tool_name]', '[tool_args]', '[tool_end]']
 
 multimodal_tokens = [
     '[image_start]', '[image_end]', '[audio_start]', '[audio_end]', 
-    '[video_start]', '[video_end]', '[point]', '[box_start]', '[box_end]'
+    '[video_start]', '[video_end]'
 ]
 
 base_special_tokens = (
@@ -42,7 +44,7 @@ chat_template = (
             
         "{% else %}"
             
-            "{% if message['role'] == 'system' %}"
+            "{% if message['role'] in ['system', 'instruction'] %}"
                 "{{ '[system]' }}"
             "{% elif message['role'] == 'user' %}"
                 "{{ '[user]' }}"
@@ -50,6 +52,8 @@ chat_template = (
                 "{{ '[model]' }}"
             "{% elif message['role'] == 'tool' %}"
                 "{{ '[tool]' }}"
+            "{% elif message['role'] == 'train' %}"
+                "{{ '[train]' }}"
             "{% else %}"
                 "{{ message['role'] }}"
             "{% endif %}"

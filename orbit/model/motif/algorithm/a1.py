@@ -44,6 +44,7 @@ class A1Decoder(BaseBlock):
             num_heads=num_heads,
             num_kv_heads=num_kv_heads,
             use_qk_norm=True,
+            use_gate=True,
             dropout=dropout
         )
 
