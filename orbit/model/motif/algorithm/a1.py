@@ -139,7 +139,8 @@ class A1Model(BaseBlock):
         self.token_emb = nn.Embedding(vocab_size, model_dim)
         self.rope_emb = RotaryPositionalEmbedding(
             model_dim=model_dim // num_heads,
-            max_len=max_len
+            max_len=max_len,
+            base=500000
         )
         self.dropout = nn.Dropout(dropout)
         
