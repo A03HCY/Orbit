@@ -176,7 +176,7 @@ class A1Model(BaseBlock):
         
     def forward(
         self,
-        x: torch.Tensor,
+        input_ids: torch.Tensor,
         mask: torch.Tensor = None,
         start_pos: int = 0,
         past_key_values: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
@@ -185,7 +185,7 @@ class A1Model(BaseBlock):
         ''' 前向传播。
 
         Args:
-            x (torch.Tensor): 输入 Token ID 张量。Shape: [Batch, Seq_Len]。
+            input_ids (torch.Tensor): 输入 Token ID 张量。Shape: [Batch, Seq_Len]。
             mask (torch.Tensor, optional): 注意力掩码。默认为 None。
             start_pos (int, optional): 起始位置，用于推理。默认为 0。
             past_key_values (Optional[List[Tuple[torch.Tensor, torch.Tensor]]], optional): 过去的键值对列表。默认为 None。
@@ -195,7 +195,7 @@ class A1Model(BaseBlock):
             A1ModelOutput: 模型输出。
         '''
         
-        h = self.token_emb(x)
+        h = self.token_emb(input_ids)
         h = self.dropout(h)
         
         next_cache = [] if use_cache else None

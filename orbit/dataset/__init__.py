@@ -31,6 +31,7 @@ class SequentialDataset(Dataset):
         fim_rate (float): FIM 概率。
         max_length (int, optional): 最大长度。
         in_memory (bool): 是否预加载到内存。
+        remove_strings (list[str], optional): 在 model_text 最终阶段删除的字符串列表。
     '''
     def __init__(
         self, 
@@ -40,7 +41,8 @@ class SequentialDataset(Dataset):
         cot_delimiter=None, 
         fim_rate=0.5, 
         max_length=None, 
-        in_memory=False
+        in_memory=False,
+        remove_strings=None
     ):
         self.root_dir = Path(root_dir)
         
@@ -59,6 +61,7 @@ class SequentialDataset(Dataset):
         self.fim_rate = fim_rate
         self.max_length = max_length
         self.in_memory = in_memory
+        self.remove_strings = remove_strings
         
         self.data_entries = []
         self.total_rows = 0
@@ -260,12 +263,17 @@ class SequentialDataset(Dataset):
                 model_text = parsed_model
                 if not reasoning_text: reasoning_text = parsed_cot
         
+        if model_text and self.remove_strings:
+            for s in self.remove_strings:
+                model_text = model_text.replace(s, '')
+            model_text = model_text.strip()
+            
         tool_calls_raw = get('tool_calls')
         if model_text or reasoning_text or tool_calls_raw:
             msg = {
                 'role': 'model',
                 'content': model_text if model_text else '',
-                'reasoning_content': reasoning_text
+                'reasoning_content': reasoning_text if reasoning_text else ''
             }
             if tool_calls_raw:
                 parsed_tools = self._safe_json_load(tool_calls_raw)
@@ -526,7 +534,8 @@ class AutoMixedDataset(ConcatDataset):
         fim_rate=0.5,
         in_memory=True,
         max_length=4096,
-        num_workers=8
+        num_workers=8,
+        remove_strings=None
     ):
         self.datasets = []
         self.configs = []
@@ -537,7 +546,12 @@ class AutoMixedDataset(ConcatDataset):
             
             sub_config = {name: sub_mapping}
             
-            config_str = json.dumps(sub_config, sort_keys=True)
+            # 包含 remove_strings 到 hash 计算中，确保配置变更时重建缓存
+            hash_data = {
+                'config': sub_config,
+                'remove_strings': remove_strings
+            }
+            config_str = json.dumps(hash_data, sort_keys=True)
             config_hash = hashlib.md5(config_str.encode()).hexdigest()[:8]
             
             sub_cache_dir = os.path.join(cache_root_dir, f"{name}_{config_hash}")
@@ -549,7 +563,8 @@ class AutoMixedDataset(ConcatDataset):
                 cot_delimiter=cot_delimiter,
                 fim_rate=fim_rate,
                 max_length=max_length,
-                in_memory=in_memory
+                in_memory=in_memory,
+                remove_strings=remove_strings
             )
             
             cached_ds = CachedDataset(

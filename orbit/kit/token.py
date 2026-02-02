@@ -112,7 +112,7 @@ def create_tokenizer_trainer(
     unk_token: str='[unk]',
     vocab_size: int=32000,
     special_tokens: list[str]=base_special_tokens
-) -> BpeTrainer:
+) -> tuple:
     ''' 创建一个BPE Tokenizer训练器
 
     配置并返回一个用于训练BPE (Byte-Pair Encoding) 模型的分词器训练对象。
@@ -133,7 +133,10 @@ def create_tokenizer_trainer(
 
     tokenizer.pre_tokenizer = pre_tokenizers.Sequence([
         pre_tokenizers.Digits(individual_digits=True),
-        pre_tokenizers.ByteLevel(add_prefix_space=False, use_regex=True),
+        pre_tokenizers.ByteLevel(
+            add_prefix_space=False,
+            use_regex=True
+        )
     ])
 
     tokenizer.decoder = decoders.ByteLevel()
@@ -142,8 +145,8 @@ def create_tokenizer_trainer(
         vocab_size=vocab_size,
         special_tokens=special_tokens,
         initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
-        max_token_length=16,
-        min_frequency=2 
+        max_token_length=32,
+        min_frequency=10
     )
 
     return tokenizer, trainer
