@@ -2,7 +2,7 @@ from typing import Dict, Any, TYPE_CHECKING
 
 if TYPE_CHECKING: from orbit.engine import Engine
 
-def pre_train(engine: Engine):
+def pre_train(engine: 'Engine'):
     outputs = engine.model(engine.data)
     logits = outputs.logits
     

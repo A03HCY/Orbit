@@ -119,17 +119,17 @@ class Engine:
         self.num_epochs = 0
         self.start_epoch = 0
         
-        self.global_step = 0     # 全局 Step
-        self.epoch = 0           # 当前 Epoch
-        self.batch_idx = 0       # 当前 Batch 索引
+        self.global_step = 0      # 全局 Step
+        self.epoch = 0            # 当前 Epoch
+        self.batch_idx = 0        # 当前 Batch 索引
         self.start_batch_idx = -1 # 恢复训练时的起始 Batch 索引 (跳过此索引及之前的)
         self.is_first_batch = False
         self.is_last_batch = False
         self.is_end_of_epoch = False
         self.is_epoch_end = False
         
-        self.state = "IDLE"      # TRAIN / EVAL
-        self.stop_training = False # 插件可以通过设置此标志为 True 来停止训练
+        self.state = "IDLE"         # TRAIN / EVAL
+        self.stop_training = False  # 插件可以通过设置此标志为 True 来停止训练
         self.stop_source: Optional[str] = None
         self.stop_reason: Optional[str] = None
         self.accumulation_steps = 1 # 梯度累积步数
@@ -202,6 +202,19 @@ class Engine:
             if p.__class__.__name__ == 'Warmup' and hasattr(p, 'total_warmup_steps'):
                 if self.global_step <= p.total_warmup_steps:
                     return True
+        return False
+
+    def is_in_annealing(self) -> bool:
+        '''检查当前是否处于 Annealing 阶段。
+
+        Returns:
+            bool: 如果处于 Annealing 阶段返回 True，否则返回 False。
+        '''
+        for p in self.plugins:
+            if p.__class__.__name__ == 'Annealing':
+                if hasattr(p, 'warmup_steps') and hasattr(p, 'total_train_steps'):
+                    if p.warmup_steps < self.global_step <= p.total_train_steps:
+                        return True
         return False
 
     def init_board(self, log_dir: str = 'runs') -> 'Engine':
@@ -539,6 +552,8 @@ class Engine:
                     
                     if self.is_in_warmup():
                         lr_str += " [Warmup]"
+                    elif self.is_in_annealing():
+                        lr_str += " [Annealing]"
 
                 msg = f"[dark_magenta]Epoch {self.epoch+1}/{self.num_epochs}"
                 if "train_loss" in self.metrics:
@@ -626,6 +641,8 @@ class Engine:
                         
                         if self.is_in_warmup():
                             lr_str += " [Warmup]"
+                        elif self.is_in_annealing():
+                            lr_str += " [Annealing]"
 
                     logs = f"Loss: {loss_val:.4f}{lr_str} [Ep {self.epoch+1}/{self.num_epochs}]"
                     progress.update(task, advance=1, description=logs)
@@ -674,6 +691,8 @@ class Engine:
                 
                 if self.is_in_warmup():
                     lr_str += " [Warmup]"
+                elif self.is_in_annealing():
+                    lr_str += " [Annealing]"
             
             task = progress.add_task(f"{lr_str} [Ep {self.epoch+1}/{self.num_epochs}]", total=num_batches)
             
@@ -761,6 +780,8 @@ class Engine:
                         lr_str = f" | LR: {current_lr:.6f}"
                     if self.is_in_warmup():
                         lr_str += " [Warmup]"
+                    elif self.is_in_annealing():
+                        lr_str += " [Annealing]"
 
                 msg = f"[dark_magenta]Epoch {self.epoch+1}/{self.num_epochs} | Train Loss: {avg_loss:.4f}{lr_str}"
                 self.print(msg, plugin='Engine')

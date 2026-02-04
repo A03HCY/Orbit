@@ -83,7 +83,7 @@ class Warmup(Callback):
         """
         engine = event.engine
         # 当前步数 (从 1 开始计算，方便公式)
-        current_step = engine.global_step + 1
+        current_step = engine.batch_idx + 1
         
         # 如果超出预热范围且不是 Noam 模式，则不进行干预
         # Noam 模式是一种全程调度策略，所以它会一直运行

@@ -5,6 +5,7 @@ from .checkpoint import Checkpoint
 from .board import Board
 from .display_model import ModelSummary
 from .warmup import Warmup
+from .annealing import Annealing
 from .early_stopping import EarlyStopping
 from .gradient_accumulation import GradientAccumulation
 from .mentor import Mentor

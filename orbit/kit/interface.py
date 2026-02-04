@@ -1,12 +1,13 @@
 from threading import Thread
 from transformers import AutoModelForCausalLM, AutoTokenizer, TextIteratorStreamer
-from rich.console import Console
+from rich.console import Console, Group
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.live import Live
 from rich.prompt import Prompt
 
 from .wrapper import AutoRegressiveWrapper
+from .token import reasoning_tokens
 
 class ChatInterface:
     '''
@@ -71,7 +72,8 @@ class ChatInterface:
         top_k: int = 50,
         top_p: float = 0.9,
         repetition_penalty: float = 1.0,
-        do_sample: bool = True
+        do_sample: bool = True,
+        enable_thinking: bool = False
     ):
         '''
         流式生成对话响应
@@ -84,6 +86,7 @@ class ChatInterface:
             top_p (float): Top-p 采样值
             repetition_penalty (float): 重复惩罚系数
             do_sample (bool): 是否使用采样
+            enable_thinking (bool): 是否启用思考模式
 
         Yields:
             str: 生成的新文本片段
@@ -91,11 +94,16 @@ class ChatInterface:
         text = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
-            add_generation_prompt=True
+            add_generation_prompt=True,
+            enable_thinking=enable_thinking
         )
         model_inputs = self.tokenizer([text], return_tensors='pt').to(self.device)
 
-        streamer = TextIteratorStreamer(self.tokenizer, skip_prompt=True, skip_special_tokens=True)
+        streamer = TextIteratorStreamer(
+            self.tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=not enable_thinking
+        )
 
         generation_kwargs = dict(
             model_inputs,
@@ -113,11 +121,18 @@ class ChatInterface:
         thread.start()
 
         for new_text in streamer:
+            if enable_thinking:
+                for special_token in self.tokenizer.all_special_tokens:
+                    if special_token not in reasoning_tokens and special_token in new_text:
+                        new_text = new_text.replace(special_token, '')
             yield new_text
 
-    def interact(self):
+    def interact(self, enable_thinking: bool = True):
         '''
         启动命令行实时交互会话
+
+        Args:
+            enable_thinking (bool): 是否启用思考模式展示
         '''
         self.console.print(Panel(
             '[bold]聊天接口已就绪[/bold]\n输入 [red]"exit"[/red] 或 [red]"quit"[/red] 退出',
@@ -139,13 +154,49 @@ class ChatInterface:
                 
                 self.console.print('[bold purple]Model:[/bold purple]\n')
                 full_response = ''
+                thought_content = ''
+                is_thinking = False
                 
-                with Live(Markdown(""), console=self.console, refresh_per_second=12) as live:
-                    for chunk in self.stream_chat(history):
-                        full_response += chunk
-                        live.update(Markdown(full_response))
+                with Live(console=self.console, refresh_per_second=12) as live:
+                    for chunk in self.stream_chat(history, enable_thinking=enable_thinking):
+                        buffer = chunk
+                        
+                        if '[cot_start]' in buffer:
+                            is_thinking = True
+                            parts = buffer.split('[cot_start]')
+                            full_response += parts[0]
+                            buffer = parts[1]
+                        
+                        if '[cot_end]' in buffer:
+                            is_thinking = False
+                            parts = buffer.split('[cot_end]')
+                            thought_content += parts[0]
+                            buffer = parts[1]
+                            
+                        if is_thinking:
+                            thought_content += buffer
+                        else:
+                            full_response += buffer
+                            
+                        renderables = []
+                        if thought_content:
+                            title = "Thinking..." if is_thinking else "Thought Process"
+                            style = "yellow" if is_thinking else "dim"
+                            renderables.append(Panel(Markdown(thought_content), title=title, border_style=style))
+                            
+                        if full_response:
+                            renderables.append(Markdown(full_response))
+                        
+                        if not renderables:
+                            renderables.append(Markdown(""))
+                            
+                        live.update(Group(*renderables))
                 
-                history.append({'role': self.model_role, 'content': full_response})
+                msg = {'role': self.model_role}
+                if thought_content:
+                    msg['thought'] = thought_content
+                msg['content'] = full_response
+                history.append(msg)
 
             except KeyboardInterrupt:
                 self.console.print('\n[bold red][会话已中断][/bold red]')

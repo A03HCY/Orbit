@@ -228,59 +228,98 @@ class SequentialDataset(Dataset):
         mapping = entry['mapping']
         
         row_data = self._read_row(entry, idx - entry['start_idx'])
-        def get(key):
-            col_name = mapping.get(key)
-            if not col_name: return None
+        
+        conversations = None
+        if isinstance(row_data, dict):
+            conversations = row_data.get('conversations')
+        elif hasattr(row_data, 'get'):
+            conversations = row_data.get('conversations')
+        elif hasattr(row_data, 'index') and 'conversations' in row_data.index:
+            conversations = row_data['conversations']
             
-            val = None
-            if hasattr(row_data, 'get'):
-                val = row_data.get(col_name)
-            elif hasattr(row_data, 'index') and col_name in row_data.index:
-                val = row_data[col_name]
-            
-            if pd.notna(val) and val is not None:
-                s = str(val).strip()
-                return s if len(s) > 0 else None
-            return None
         messages = []
-        sys_text = get('system')
-        if sys_text: messages.append({'role': 'system', 'content': sys_text})
-        train_text = get('train')
-        if train_text:
-            if self.fim_rate > 0 and np.random.rand() < self.fim_rate:
-                fim_msg = self._create_fim_dict(train_text)
-                messages.append(fim_msg if fim_msg else {'role': 'train', 'content': train_text})
-            else:
-                messages.append({'role': 'train', 'content': train_text})
-        user_text = get('user')
-        if user_text: messages.append({'role': 'user', 'content': user_text})
-        model_text = get('model')
-        reasoning_text = get('reasoning')
-        
-        if model_text and self.cot_start:
-            parsed_model, parsed_cot = self._extract_embedded_cot(model_text)
-            if parsed_cot:
-                model_text = parsed_model
-                if not reasoning_text: reasoning_text = parsed_cot
-        
-        if model_text and self.remove_strings:
-            for s in self.remove_strings:
-                model_text = model_text.replace(s, '')
-            model_text = model_text.strip()
+        if conversations and isinstance(conversations, list):
+            for msg in conversations:
+                role = msg.get('role')
+                content = msg.get('content')
+                if not role or content is None: continue
+                
+                if role == 'assistant':
+                    model_text = content
+                    reasoning_text = None
+                    
+                    if self.cot_start:
+                        model_text, parsed_cot = self._extract_embedded_cot(model_text)
+                        if parsed_cot:
+                            reasoning_text = parsed_cot
+                    
+                    if self.remove_strings:
+                        for s in self.remove_strings:
+                            model_text = model_text.replace(s, '')
+                        model_text = model_text.strip()
+                        
+                    messages.append({
+                        'role': 'model',
+                        'content': model_text,
+                        'reasoning_content': reasoning_text if reasoning_text else ''
+                    })
+                else:
+                    messages.append({'role': role, 'content': content})
+        else:
+            def get(key):
+                col_name = mapping.get(key)
+                if not col_name: return None
+                
+                val = None
+                if hasattr(row_data, 'get'):
+                    val = row_data.get(col_name)
+                elif hasattr(row_data, 'index') and col_name in row_data.index:
+                    val = row_data[col_name]
+                
+                if pd.notna(val) and val is not None:
+                    s = str(val).strip()
+                    return s if len(s) > 0 else None
+                return None
             
-        tool_calls_raw = get('tool_calls')
-        if model_text or reasoning_text or tool_calls_raw:
-            msg = {
-                'role': 'model',
-                'content': model_text if model_text else '',
-                'reasoning_content': reasoning_text if reasoning_text else ''
-            }
-            if tool_calls_raw:
-                parsed_tools = self._safe_json_load(tool_calls_raw)
-                if parsed_tools: msg['tool_calls'] = parsed_tools
-            messages.append(msg)
-        tool_res = get('tool_result')
-        if tool_res: messages.append({'role': 'tool', 'content': tool_res})
+            sys_text = get('system')
+            if sys_text: messages.append({'role': 'system', 'content': sys_text})
+            train_text = get('train')
+            if train_text:
+                if self.fim_rate > 0 and np.random.rand() < self.fim_rate:
+                    fim_msg = self._create_fim_dict(train_text)
+                    messages.append(fim_msg if fim_msg else {'role': 'train', 'content': train_text})
+                else:
+                    messages.append({'role': 'train', 'content': train_text})
+            user_text = get('user')
+            if user_text: messages.append({'role': 'user', 'content': user_text})
+            model_text = get('model')
+            reasoning_text = get('reasoning')
+            
+            if model_text and self.cot_start:
+                parsed_model, parsed_cot = self._extract_embedded_cot(model_text)
+                if parsed_cot:
+                    model_text = parsed_model
+                    if not reasoning_text: reasoning_text = parsed_cot
+            
+            if model_text and self.remove_strings:
+                for s in self.remove_strings:
+                    model_text = model_text.replace(s, '')
+                model_text = model_text.strip()
+                
+            tool_calls_raw = get('tool_calls')
+            if model_text or reasoning_text or tool_calls_raw:
+                msg = {
+                    'role': 'model',
+                    'content': model_text if model_text else '',
+                    'reasoning_content': reasoning_text if reasoning_text else ''
+                }
+                if tool_calls_raw:
+                    parsed_tools = self._safe_json_load(tool_calls_raw)
+                    if parsed_tools: msg['tool_calls'] = parsed_tools
+                messages.append(msg)
+            tool_res = get('tool_result')
+            if tool_res: messages.append({'role': 'tool', 'content': tool_res})
+
         if not messages:
             return {
                 'input_ids': torch.tensor([], dtype=torch.long),
@@ -308,7 +347,8 @@ class CachedDataset(Dataset):
         chunk_size=1024*1024*1024, # 1GB
         rebuild=False, 
         num_workers=8,
-        save_interval=10000 # 每处理多少条保存一次 Index
+        save_interval=10000, # 每处理多少条保存一次 Index
+        force_reuse=False
     ):
         self.source_dataset = source_dataset
         self.cache_dir = cache_dir
@@ -316,6 +356,7 @@ class CachedDataset(Dataset):
         self.chunk_size = chunk_size
         self.num_workers = num_workers
         self.save_interval = save_interval
+        self.meta: dict = {}
         
         self.meta_path = os.path.join(cache_dir, "meta.json")
         self.idx_path = os.path.join(cache_dir, "index.npy")
@@ -333,9 +374,12 @@ class CachedDataset(Dataset):
                 print(f"🔄 [CachedDataset] Incremental Update: {processed_count} -> {total_count}")
                 self._build_cache(resume_from=processed_count)
             elif processed_count > total_count:
-                print(f"⚠️ [CachedDataset] Cache ({processed_count}) > Source ({total_count}). Source may have shrunk? Rebuilding...")
-                shutil.rmtree(cache_dir)
-                self._build_cache(resume_from=0)
+                if force_reuse:
+                    print(f"⚠️ [CachedDataset] Cache ({processed_count}) > Source ({total_count}). Source shrunk but force_reuse=True. Using existing cache.")
+                else:
+                    print(f"⚠️ [CachedDataset] Cache ({processed_count}) > Source ({total_count}). Source may have shrunk? Rebuilding...")
+                    shutil.rmtree(cache_dir)
+                    self._build_cache(resume_from=0)
             else:
                 print(f"✅ [CachedDataset] Cache up-to-date ({processed_count} samples).")
     
@@ -535,7 +579,8 @@ class AutoMixedDataset(ConcatDataset):
         in_memory=True,
         max_length=4096,
         num_workers=8,
-        remove_strings=None
+        remove_strings=None,
+        force_reuse=False
     ):
         self.datasets = []
         self.configs = []
@@ -556,6 +601,18 @@ class AutoMixedDataset(ConcatDataset):
             
             sub_cache_dir = os.path.join(cache_root_dir, f"{name}_{config_hash}")
             
+            if force_reuse and not os.path.exists(sub_cache_dir) and os.path.exists(cache_root_dir):
+                candidates = []
+                for entry in os.scandir(cache_root_dir):
+                    if entry.is_dir() and entry.name.startswith(f"{name}_"):
+                        candidates.append(entry.path)
+                
+                if candidates:
+                    candidates.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+                    old_cache = candidates[0]
+                    print(f"⚠️ [AutoMixed] Force reuse active: Redirecting '{name}' to existing cache '{os.path.basename(old_cache)}' (Expected hash: {config_hash})")
+                    sub_cache_dir = old_cache
+            
             raw_dataset = SequentialDataset(
                 root_dir=root_dir,
                 tokenizer=tokenizer,
@@ -572,7 +629,8 @@ class AutoMixedDataset(ConcatDataset):
                 cache_dir=sub_cache_dir,
                 max_length=max_length,
                 num_workers=num_workers,
-                save_interval=10000
+                save_interval=10000,
+                force_reuse=force_reuse
             )
             
             self.datasets.append(cached_ds)
@@ -595,13 +653,29 @@ class PackedSeqDataset(IterableDataset):
         shuffle (bool): 是否打乱原始数据集的读取顺序。默认为 True。
         seed (int): 随机种子。
     '''
-    def __init__(self, dataset: SequentialDataset|CachedDataset, max_length:int, shuffle=True, seed=42):
+    def __init__(self, dataset: SequentialDataset|CachedDataset|ConcatDataset, max_length:int, shuffle=True, seed=42):
         self.dataset = dataset
         self.max_length = max_length
         self.shuffle = shuffle
         self.seed = seed
         self.epoch = 0
     
+    def _get_dataset_tokens(self, dataset):
+        ''' 递归计算数据集的总 Token 数 '''
+        if isinstance(dataset, CachedDataset):
+            return dataset.meta.get('total_tokens', 0)
+        elif isinstance(dataset, ConcatDataset):
+            return sum(self._get_dataset_tokens(ds) for ds in dataset.datasets)
+        return 0
+
+    def __len__(self):
+        total_tokens = self._get_dataset_tokens(self.dataset)
+        
+        if total_tokens > 0:
+            return total_tokens // self.max_length
+        
+        return 0
+
     def set_epoch(self, epoch):
         ''' 设置当前 Epoch，确保每轮 Shuffle 顺序不同
 

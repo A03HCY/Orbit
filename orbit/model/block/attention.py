@@ -61,9 +61,7 @@ def apply_attention(
                     dropout_p=dropout
                 )
             return AttentionOutput(output=output, attention_weights=None)
-        except Exception:
-            print('Error at attn cal')
-            pass
+        except Exception: pass
 
     d_k = query_states.size(-1)
     scores = torch.matmul(query_states, key_states.transpose(-2, -1)) / math.sqrt(d_k)

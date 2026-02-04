@@ -96,7 +96,7 @@ class Checkpoint(Callback):
         检查是否需要按 Step 保存
         """
         if self.every_n_train_steps and event.engine.state == "TRAIN":
-            step = event.engine.global_step
+            step = event.engine.batch_idx
             if step > 0 and step % self.every_n_train_steps == 0:
                 # 保存 step checkpoint
                 ext = ".safetensors" if self.use_safetensors else ".pt"
