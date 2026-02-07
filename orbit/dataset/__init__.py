@@ -395,6 +395,64 @@ class SFTDataset(SequentialDataset):
         }
 
 
+class MultiTurnDataset(SequentialDataset):
+    ''' 多轮对话数据集 (Multi-Turn Dataset)
+    从 conversations 读取 [{role, content}...]，返回 input_ids 和 mask。
+    mask 遮住除最后 model 的所有内容（假设数据列表最后一个总是 model 消息）。
+    '''
+    def __getitem__(self, idx):
+        messages = self.get_messages(idx)
+        if not messages:
+            return {
+                'input_ids': torch.tensor([], dtype=torch.long),
+                'mask': torch.tensor([], dtype=torch.long)
+            }
+
+        # 1. 计算完整序列
+        enc_full = self.tokenizer.apply_chat_template(
+            messages,
+            truncation=False,
+            padding=False,
+            return_tensors='pt'
+        )
+        input_ids = enc_full[0]
+        
+        # 兼容 Encoding 对象 (如果有 .ids 属性)
+        if hasattr(input_ids, 'ids'):
+            input_ids = torch.tensor(input_ids.ids, dtype=torch.long)
+
+        # 2. 计算 Prefix (Prompt) 长度
+        prefix_len = 0
+        if len(messages) > 1:
+            # 取前 n-1 条消息作为 prompt
+            enc_prefix = self.tokenizer.apply_chat_template(
+                messages[:-1],
+                truncation=False,
+                padding=False,
+                return_tensors='pt'
+            )
+            prefix_ids = enc_prefix[0]
+            if hasattr(prefix_ids, 'ids'):
+                prefix_len = len(prefix_ids.ids)
+            else:
+                prefix_len = len(prefix_ids)
+        
+        # 3. 生成 Mask
+        mask = torch.zeros(len(input_ids), dtype=torch.long)
+        if prefix_len < len(input_ids):
+            mask[prefix_len:] = 1 # 仅对 Response 部分计算 Loss
+            
+        # 4. 长度截断
+        if self.max_length and len(input_ids) > self.max_length:
+            input_ids = input_ids[:self.max_length]
+            mask = mask[:self.max_length]
+            
+        return {
+            'input_ids': input_ids,
+            'mask': mask
+        }
+
+
 class CachedDataset(Dataset):
     ''' 缓存加速数据集 (支持增量更新 & 断点续传)
     '''
