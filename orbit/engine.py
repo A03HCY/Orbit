@@ -17,6 +17,25 @@ from orbit.plugin   import Checkpoint, Board, ModelSummary
 from orbit.utils    import load_model
 
 
+class _SkipBatchSampler:
+    '''用于在恢复训练时高效跳过 Batch 的 Sampler 包装器'''
+    def __init__(self, batch_sampler, skip):
+        self.batch_sampler = batch_sampler
+        self.skip = skip
+        
+    def __iter__(self):
+        it = iter(self.batch_sampler)
+        for _ in range(self.skip):
+            try:
+                next(it)
+            except StopIteration:
+                break
+        yield from it
+        
+    def __len__(self):
+        return max(0, len(self.batch_sampler) - self.skip)
+
+
 class Engine:
     '''训练循环控制器，负责协调模型训练、验证及回调事件。
 
@@ -515,6 +534,17 @@ class Engine:
                 self.epoch = epoch
                 self.metrics = {}
                 
+                # 确保 Dataset 能够感知 Epoch (用于 Shuffle 等)
+                dataset = getattr(self.train_loader, 'dataset', None)
+                if dataset and hasattr(dataset, 'set_epoch'):
+                    dataset.set_epoch(epoch)
+                
+                # 如果使用 Sampler 且是 DDP 模式，通常需要 set_epoch
+                # 虽然 accelerator 可能会处理，但显式调用更安全
+                sampler = getattr(self.train_loader, 'sampler', None)
+                if sampler and hasattr(sampler, 'set_epoch'):
+                    sampler.set_epoch(epoch)
+                
                 # --- 1. Training Loop ---
                 self.state = "TRAIN"
                 self._fire_event("on_epoch_start")
@@ -591,6 +621,34 @@ class Engine:
             
         num_batches = total_steps if total_steps is not None else real_len
         
+        # --- Fast Resume Logic ---
+        skip_count = 0
+        if self.epoch == self.start_epoch and self.start_batch_idx > -1:
+            skip_count = self.start_batch_idx + 1
+
+        original_batch_sampler = None
+        dataset_handled_skip = False
+        
+        if skip_count > 0:
+            dataset = getattr(loader, 'dataset', None)
+            
+            if dataset and hasattr(dataset, 'set_skip_batches'):
+                dataset.set_skip_batches(skip_count)
+                dataset_handled_skip = True
+                
+            elif hasattr(loader, 'batch_sampler') and loader.batch_sampler is not None:
+                try:
+                    _ = len(loader.batch_sampler)
+                    
+                    original_batch_sampler = loader.batch_sampler
+                    loader.batch_sampler = _SkipBatchSampler(original_batch_sampler, skip_count)
+                except TypeError:
+                    original_batch_sampler = None
+                except Exception as e:
+                    if original_batch_sampler:
+                        loader.batch_sampler = original_batch_sampler
+                    original_batch_sampler = None
+
         # 仅主进程显示进度条
         disable_progress = not self.accelerator.is_main_process
         
@@ -607,11 +665,20 @@ class Engine:
             
             task = progress.add_task(f"[Ep {self.epoch+1}/{self.num_epochs}]", total=num_batches)
             
-            for batch_idx, batch_data in enumerate(loader):
-                if self.epoch == self.start_epoch and batch_idx <= self.start_batch_idx:
-                    if not disable_progress:
-                        progress.update(task, advance=1, description=f"[dim]Skipping batch {batch_idx}...[/]")
-                    continue
+            if (original_batch_sampler or dataset_handled_skip) and not disable_progress and skip_count > 0:
+                progress.update(task, advance=skip_count, description=f"[dim]Fast skipping {skip_count} batches...[/]")
+
+            for i, batch_data in enumerate(loader):
+                if original_batch_sampler or dataset_handled_skip:
+                    batch_idx = i + skip_count
+                else:
+                    batch_idx = i
+                
+                if not original_batch_sampler and not dataset_handled_skip:
+                    if self.epoch == self.start_epoch and batch_idx <= self.start_batch_idx:
+                        if not disable_progress:
+                            progress.update(task, advance=1, description=f"[dim]Skipping batch {batch_idx}...[/]")
+                        continue
 
                 self.batch_idx = batch_idx
                 self.is_first_batch = (batch_idx == 0)
@@ -650,6 +717,9 @@ class Engine:
                 self._fire_event("on_batch_end")
                 
                 if self.stop_training: break
+
+        if original_batch_sampler:
+            loader.batch_sampler = original_batch_sampler
             
         if not self.stop_training:
             self.is_epoch_end = True

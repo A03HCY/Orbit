@@ -223,7 +223,7 @@ class SequentialDataset(Dataset):
         
         return text, None
     
-    def __getitem__(self, idx):
+    def get_messages(self, idx):
         entry = next(e for e in self.data_entries if e['start_idx'] <= idx < e['end_idx'])
         mapping = entry['mapping']
         
@@ -319,7 +319,11 @@ class SequentialDataset(Dataset):
                 messages.append(msg)
             tool_res = get('tool_result')
             if tool_res: messages.append({'role': 'tool', 'content': tool_res})
+        
+        return messages
 
+    def __getitem__(self, idx):
+        messages = self.get_messages(idx)
         if not messages:
             return {
                 'input_ids': torch.tensor([], dtype=torch.long),
@@ -334,6 +338,61 @@ class SequentialDataset(Dataset):
         )
         
         return tokenized[0]
+
+
+class SFTDataset(SequentialDataset):
+    ''' SFT 数据集 (Masked Supervised Fine-Tuning)
+    继承自 SequentialDataset，但在 __getitem__ 时：
+    1. 计算完整的 input_ids。
+    2. 通过增量 apply_chat_template 识别 model 回复片段。
+    3. 生成 mask (1 for model tokens, 0 for others)。
+    '''
+    def __getitem__(self, idx):
+        messages = self.get_messages(idx)
+        if not messages:
+            return {
+                'input_ids': torch.tensor([], dtype=torch.long),
+                'mask': torch.tensor([], dtype=torch.long)
+            }   
+
+        input_ids = self.tokenizer.apply_chat_template(
+            messages,
+            truncation=False,
+            padding=False,
+            return_tensors='pt'
+        )[0].ids
+        
+        mask = torch.zeros(len(input_ids), dtype=torch.long)
+        
+        curr_len = 0
+        for i, msg in enumerate(messages):
+            part_ids = self.tokenizer.apply_chat_template(
+                messages[:i+1],
+                truncation=False,
+                padding=False,
+                return_tensors='pt'
+            )[0]
+            
+            end_len = len(part_ids)
+            
+            if end_len > len(input_ids):
+                end_len = len(input_ids)
+                
+            if msg['role'] == 'model':
+                mask[curr_len:end_len] = 1
+            
+            curr_len = end_len
+            if curr_len >= len(input_ids):
+                break
+                
+        if self.max_length and len(input_ids) > self.max_length:
+            input_ids = input_ids[:self.max_length]
+            mask = mask[:self.max_length]
+            
+        return {
+            'input_ids': input_ids,
+            'mask': mask
+        }
 
 
 class CachedDataset(Dataset):
@@ -555,6 +614,13 @@ class CachedDataset(Dataset):
         
         np_array = np.array(mmap[item_offset : item_offset + int(length)], copy=True)
         return torch.from_numpy(np_array.astype(np.int64))
+    
+    def get_sample_length(self, idx):
+        ''' 快速获取样本长度 (仅读取索引，不加载数据) '''
+        try:
+            return int(self.indices[idx][2])
+        except:
+            return 0
 
 
 class AutoMixedDataset(ConcatDataset):
@@ -659,6 +725,7 @@ class PackedSeqDataset(IterableDataset):
         self.shuffle = shuffle
         self.seed = seed
         self.epoch = 0
+        self.skip_batches = 0 # 待跳过的 Batch 数
     
     def _get_dataset_tokens(self, dataset):
         ''' 递归计算数据集的总 Token 数 '''
@@ -667,6 +734,21 @@ class PackedSeqDataset(IterableDataset):
         elif isinstance(dataset, ConcatDataset):
             return sum(self._get_dataset_tokens(ds) for ds in dataset.datasets)
         return 0
+
+    def _get_sample_length(self, dataset, idx):
+        ''' 递归获取样本长度 (Helper) '''
+        if hasattr(dataset, 'get_sample_length'):
+            return dataset.get_sample_length(idx)
+        elif isinstance(dataset, ConcatDataset):
+            if idx < 0:
+                if idx == -1: raise ValueError("Target index has not been reset to 0")
+                return 0
+            for ds in dataset.datasets:
+                l = len(ds)
+                if idx < l:
+                    return self._get_sample_length(ds, idx)
+                idx -= l
+        return None
 
     def __len__(self):
         total_tokens = self._get_dataset_tokens(self.dataset)
@@ -683,6 +765,10 @@ class PackedSeqDataset(IterableDataset):
             epoch (int): 当前的 epoch 数。
         '''
         self.epoch = epoch
+        
+    def set_skip_batches(self, n):
+        ''' 设置需要跳过的 Batch 数量 (用于断点续训) '''
+        self.skip_batches = n
     
     def __iter__(self):
         ''' 迭代数据集，返回打包后的序列
@@ -709,13 +795,54 @@ class PackedSeqDataset(IterableDataset):
             iter_start = worker_id * per_worker
             iter_end = min(iter_start + per_worker, num_samples)
             indices = indices[iter_start:iter_end]
+            # Resume 在多进程 IterableDataset 下非常困难。
+            # 最佳实践是将 num_workers 设为 0 进行 Resume，或者接受数据的一定随机性。
+            pass 
             
         buffer_ids = []
         
+        skip_tokens = self.skip_batches * self.max_length
+        skipped_cnt = 0
+        
         for idx in indices:
+            # --- Fast Skip Mode ---
+            if skip_tokens > 0:
+                l = self._get_sample_length(self.dataset, idx)
+                
+                if l is not None and skipped_cnt + l <= skip_tokens:
+                    skipped_cnt += l
+                    continue
+                
+                new_ids = self.dataset[idx]
+                if isinstance(new_ids, torch.Tensor): new_ids = new_ids.tolist()
+                l = len(new_ids)
+                
+                if skipped_cnt + l <= skip_tokens:
+                    skipped_cnt += l
+                    continue
+                else:
+                    start_offset = skip_tokens - skipped_cnt
+                    skip_tokens = 0
+                    self.skip_batches = 0
+                    
+                    if start_offset < l:
+                        buffer_ids.extend(new_ids[start_offset:])
+                    
+                    while len(buffer_ids) >= self.max_length:
+                        chunk = buffer_ids[:self.max_length]
+                        buffer_ids = buffer_ids[self.max_length:]
+                        input_ids = torch.tensor(chunk, dtype=torch.long)
+                        yield input_ids
+                    
+                    continue
+
+            # --- Normal Mode ---
             new_ids = self.dataset[idx]
             
             if len(new_ids) == 0: continue
+            
+            if isinstance(new_ids, torch.Tensor):
+                new_ids = new_ids.tolist()
             
             buffer_ids.extend(new_ids)
             
